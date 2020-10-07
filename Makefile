@@ -7,8 +7,7 @@ all:
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(pwd) clean
 
-test:
+test: all
 	sudo dmesg -C
 	sudo insmod src/main.ko
-	sudo rmmod main
-	dmesg
+	dmesg -w
