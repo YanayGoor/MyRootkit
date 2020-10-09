@@ -460,8 +460,8 @@ static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_le
 static int send_response(
     unsigned short job_id,
     int response_status,
-    int local_ip,
-    int remote_ip,
+    unsigned int local_ip,
+    unsigned int remote_ip,
     unsigned char remote_mac[],
     struct net_device *dev
 ) {
