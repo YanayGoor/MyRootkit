@@ -10,7 +10,6 @@ from typing import Dict
 
 JOB_ID_SIZE = 2 * 8
 REQUEST_PORT = 1111
-RESPONSE_PORT = 2312
 MAGIC = b'mrk'
 
 
@@ -39,11 +38,12 @@ class Client:
         self._requests: Dict[int, Condition] = {}
         self._thread = Thread(target=self._listen_for_responses)
         self._should_stop = False
+        self._thread.start()
 
     def _listen_for_responses(self):
         while not self._should_stop:
             try:
-                response = self._sock.recv(1024)
+                response = self._sock.recv(3)
             except TimeoutError:
                 continue
             job_id, response_status = struct.unpack('Hb', response)
@@ -69,4 +69,5 @@ class Client:
 
 if __name__ == '__main__':
     s = Client()
-    s.execute_on_remote(sys.argv[1], CommandType.UNHIDE_FILE, '/home/yanayg/test_file2')
+    print(s.execute_on_remote(sys.argv[1], CommandType.UNHIDE_FILE, '/home/yanayg/test_file2'))
+    s.close()
