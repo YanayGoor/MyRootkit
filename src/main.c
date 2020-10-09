@@ -458,7 +458,7 @@ static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_le
 
 static int send_response(
     unsigned short job_id,
-    int response_status,
+    char response_status,
     unsigned int local_ip,
     unsigned int remote_ip,
     unsigned int remote_port,
@@ -482,8 +482,8 @@ static int send_response(
     data = skb_put(skb, data_len);
 
     // put response data.
-    *data = job_id;
-    put_unaligned((char)response_status, data + 2);
+    *(unsigned short *)data = job_id;
+    put_unaligned(response_status, data + 2);
 
     skb_push(skb, sizeof(struct udphdr));
     skb_reset_transport_header(skb);
