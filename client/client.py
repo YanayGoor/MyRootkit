@@ -11,6 +11,7 @@ from typing import Dict, Optional
 JOB_ID_SIZE = 2
 REQUEST_PORT = 1111
 MAGIC = b'mrk'
+SOCK_TIMEOUT = 0.1
 
 
 class CommandType(Enum):
@@ -22,10 +23,10 @@ class CommandType(Enum):
 
 
 class Client:
-    def __init__(self, remote=None):
+    def __init__(self, remote: Optional[str] = None):
         self._sock: SocketType = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         # TODO: Should the socket just be non-blocking? That might slow down all other threads.
-        self._sock.settimeout(0.1)
+        self._sock.settimeout(SOCK_TIMEOUT)
         # TODO: Use TTLCache from cacheutils to free responses that have not been awaited to.
         self._responses: Dict[int, int] = {}
         self._conditions: Dict[int, Condition] = {}
