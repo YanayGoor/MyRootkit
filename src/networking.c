@@ -45,12 +45,12 @@ struct cmd_type cmds[] = {
 
 
 static int send_response(
-    unsigned short job_id,
+    job_id_t job_id,
     char response_status,
     __be32 local_ip,
     __be32 remote_ip,
     __be16 remote_port,    
-    unsigned char remote_mac[],
+    unsigned char remote_mac[ETH_ALEN],
     struct net_device *dev
 ) {
     struct iphdr *iph;
@@ -101,7 +101,7 @@ static int send_response(
     iph->ihl = 5;
     iph->tos = 0;
     iph->tot_len = htons(data_len + sizeof(struct udphdr) + 5 * 4);
-    iph->id       = 0; // ?????
+    iph->id       = 0;
     iph->frag_off = 0;
     iph->ttl      = 64;
     iph->protocol = IPPROTO_UDP;
@@ -125,11 +125,11 @@ struct MRK_command_work {
     struct work_struct work;
     struct cmd_type *cmd;
     const char *arg;
-    short job_id;
-    __be32 src_addr;
-    __be32 dst_addr;
-    __be16 src_port;
-    unsigned char src_mac[ETH_ALEN];
+    job_id_t job_id;
+    __be32 remote_addr;
+    __be32 local_addr;
+    __be16 remote_port;
+    unsigned char remote_mac[ETH_ALEN];
     struct net_device *dev;
 };
 
@@ -141,10 +141,10 @@ static void handle_command(struct work_struct *work) {
     send_response(
         command_work->job_id, 
         result, 
-        command_work->dst_addr, 
-        command_work->src_addr, 
-        command_work->src_port, 
-        command_work->src_mac, 
+        command_work->local_addr,
+        command_work->remote_addr,
+        command_work->remote_port,
+        command_work->remote_mac,
         command_work->dev
     );
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
@@ -217,10 +217,10 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     arg = kmalloc(user_data_len, GFP_KERNEL);
     memcpy(arg, user_data, user_data_len + 1); /* we want the string to be null-terminated */
     command_work->arg = arg;
-    command_work->dst_addr = iph->daddr;
-    command_work->src_addr = iph->saddr;
-    command_work->src_port = udph->source;
-    memcpy(command_work->src_mac, eth_hdr(skb)->h_source, ETH_ALEN);
+    command_work->local_addr = iph->daddr;
+    command_work->remote_addr = iph->saddr;
+    command_work->remote_port = udph->source;
+    memcpy(command_work->remote_mac, eth_hdr(skb)->h_source, ETH_ALEN);
     command_work->dev = skb->dev;
     
     schedule_work(&command_work->work);
