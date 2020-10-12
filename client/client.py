@@ -78,7 +78,7 @@ class Client:
             self._submit_response(job_id, response_status)
 
 
-if __name__ == '__main__':
+def main():
     parser = ArgumentParser()
     parser.add_argument('remote_ip', type=str)
     parser.add_argument('command_type', type=lambda val: CommandType(val.encode('ascii')))
@@ -91,3 +91,7 @@ if __name__ == '__main__':
         print('timed out')
         sys.exit(1)
     print(f'remote returned: {status}')
+
+
+if __name__ == '__main__':
+    main()
