@@ -29,7 +29,7 @@ class Client:
         self._sock.settimeout(SOCK_TIMEOUT)
         # TODO: Use TTLCache from cacheutils to free responses that have not been awaited to.
         self._responses: Dict[int, int] = {}
-        self._conditions: Dict[int, Condition] = {}
+        self._condition: Condition = Condition()
         self._thread = Thread(target=self._listen_for_responses)
         self._should_stop = False
         self._remote = remote
@@ -58,18 +58,17 @@ class Client:
         self._sock.close()
 
     def _submit_response(self, job_id: int, status: int) -> None:
-        with self._conditions.setdefault(job_id, Condition()):
+        with self._condition:
             self._responses[job_id] = status
-            self._conditions[job_id].notify()
+            self._condition.notify_all()
 
     def _await_response(self, job_id: int, timeout: Optional[float] = None) -> Optional[int]:
-        with self._conditions.setdefault(job_id, Condition()):
-            notified = self._conditions[job_id].wait_for(lambda: job_id in self._responses, timeout=timeout)
+        with self._condition:
+            notified = self._condition.wait_for(lambda: job_id in self._responses, timeout=timeout)
         # Check whether the timeout was reached.
         if not notified:
             return None
         # Free the condition and response to avoid the memory usage inflating.
-        del self._conditions[job_id]
         return self._responses.pop(job_id)
 
     def _listen_for_responses(self):
