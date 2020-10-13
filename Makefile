@@ -5,7 +5,8 @@ ROOTKIT		    := rootkit
 MODULEDIR	    := /lib/modules/$(shell uname -r)
 BUILDDIR	    := $(MODULEDIR)/build
 
-# Module Headers
+# # Module Headers
+# # This enables importing headers using <>, but can conflict with linux kernel headers.
 # HEADERS	        := src/headers
 # ccflags-y	    := -I$(HEADERS)
 
@@ -16,7 +17,7 @@ $(ROOTKIT)-y 	+= src/networking.o
 # Module output
 obj-m           := $(ROOTKIT).o
 
-all:
+build:
 	$(MAKE) -C $(BUILDDIR) M=$(PWD) modules
 
 clean:
