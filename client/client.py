@@ -33,12 +33,15 @@ class Client:
         self._thread = Thread(target=self._listen_for_responses)
         self._should_stop = False
         self._remote = remote
-        self._thread.start()
 
     def bind(self, remote):
         self._remote = remote
 
+    def start(self):
+        self._thread.start()
+
     def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
+        assert self._thread.is_alive(), 'client must be started before sending'
         # TODO: Switch to randbytes in python 3.9
         job_id = random.randint(0, 2 ** (JOB_ID_SIZE * 8) - 1)
         # TODO: ascii is kinda limiting, add support in the rootkit for another encoding.
@@ -86,13 +89,15 @@ def main():
     parser.add_argument('argument', type=str, nargs='?', default='')
     ns = parser.parse_args(sys.argv[1:])
     s = Client(ns.remote_ip)
+    s.start()
     status = s.send(ns.command_type, ns.argument, timeout=1)
     s.close()
     if status is None:
         print('timed out')
-        sys.exit(1)
+        return 1
     print(f'remote returned: {status}')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
