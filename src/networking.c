@@ -246,7 +246,7 @@ int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void
     // spin_lock_irqsave(&wq_head->lock, flags);
     list_del_init(&wq_entry->entry);
     // spin_unlock_irqrestore(&wq_head->lock, flags);
-    kfree(wq_entry);
+    // kfree(wq_entry);
     return 0;
 }
 
