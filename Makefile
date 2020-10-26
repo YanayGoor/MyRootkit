@@ -17,6 +17,8 @@ $(ROOTKIT)-y 	+= src/networking.o
 # Module output
 obj-m           := $(ROOTKIT).o
 
+.PHONY: build clean watch test
+
 build:
 	$(MAKE) -C $(BUILDDIR) M=$(PWD) modules
 
