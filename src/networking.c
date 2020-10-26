@@ -176,7 +176,7 @@ static int get_udp_user_data(struct sk_buff *skb, const char **user_data) {
 static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
     struct cmd_type *cmd;
     for (cmd = cmds; cmd < (cmd + ARRAY_SIZE(cmds)); ++cmd) {
-        if (!strncmp(buffer, cmd->name, strlen(cmd->name))) {
+        if (!strcmp(buffer, cmd->name)) {
             return cmd;
         }
     }
