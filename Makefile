@@ -29,6 +29,9 @@ watch:
 	sudo dmesg -C
 	dmesg -w
 
+rm:
+	sudo rmmod ${ROOTKIT}
+	
 test:
 	sudo dmesg -C
 	sudo insmod ${ROOTKIT}.ko
