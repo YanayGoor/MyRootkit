@@ -395,6 +395,7 @@ static int my_d_init(struct dentry *dentry)
     /* Handle unhooked queue */
     spin_lock_irqsave(&unhooked_sockets_lock, flags2);
 	list_for_each_entry_safe(s_entry, temp, &unhooked_sockets, head) {
+        // TODO: Only do this if the socket is ready to patch (it has ops and recv function.)
         spin_lock_irqsave(&hook_packet_lock, flags);
         if (is_packet_sock(s_entry->sock)) {
             hook_packet_sock(s_entry->sock);
