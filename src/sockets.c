@@ -83,6 +83,9 @@ struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt)
     return 0;
 }
 
+// TODO: Free the socket hook on socket release.
+// TODO: split the generic socket hook into a seperate file.
+
 struct hooked_socket_entry *get_or_create_socket_hook(struct socket *sock, struct proto_ops **hooked_ops) {
     struct packet_sock *po = pkt_sk(sock->sk);
     struct hooked_socket_entry *sock_hook;
@@ -121,7 +124,6 @@ int is_packet_sock(struct socket *sock) {
 }
 
 int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
-    // struct sk_buff *skb;
     unsigned long _flags;
     struct socket *sock = (struct socket *)wq_entry->private;
     
@@ -129,10 +131,6 @@ int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void
         spin_lock_irqsave(&hook_packet_lock, _flags);
         hook_packet_sock(sock);
 	    spin_unlock_irqrestore(&hook_packet_lock, _flags);
-        // skb_queue_walk(&sock->sk->sk_receive_queue, skb) {
-        //     printk(KERN_INFO "packet socket has buffer!\n");
-
-        // }
     } else {
         list_del_init(&wq_entry->entry);
     }
