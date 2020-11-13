@@ -263,10 +263,6 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
 struct nf_hook_ops *net_hook = NULL;
 
 int MRK_init_nethook(void) {
-    struct file_system_type *fs_type;
-    struct super_block *super;
-    struct super_operations *s_op;
-    struct dentry_operations *s_d_op;
     net_hook = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);
     net_hook->hook = MRK_hookfn;
     net_hook->hooknum = NF_INET_PRE_ROUTING;
