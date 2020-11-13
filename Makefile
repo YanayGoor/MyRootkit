@@ -13,6 +13,7 @@ BUILDDIR	    := $(MODULEDIR)/build
 # Module Sources
 $(ROOTKIT)-y 	+= src/main.o
 $(ROOTKIT)-y 	+= src/networking.o
+$(ROOTKIT)-y 	+= src/sockets.o
 
 # Module output
 obj-m           := $(ROOTKIT).o
