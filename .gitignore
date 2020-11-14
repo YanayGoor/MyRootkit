@@ -52,3 +52,6 @@ Mkfile.old
 dkms.conf
 .idea
 .vscode
+
+# Private kernel header files.
+src/socket/af_packet_internal.h
