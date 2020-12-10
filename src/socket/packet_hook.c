@@ -7,6 +7,7 @@
 #include "af_packet_internal.h"
 #include "../headers/networking.h"
 
+static DEFINE_SPINLOCK(hook_packet_lock);
 
 int is_packet_sock(struct socket *sock) {
     if (!sock->sk) return 0;
@@ -17,7 +18,6 @@ static int hooked_packet_setsockopt(struct socket *sock, int level, int optname,
 		                            char __user *optval, unsigned int optlen)
 {
     int result;
-    unsigned long _flags;
     struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
 
     // This case shouldn't happen, but if it does, the userspace program is likely to break.
@@ -27,9 +27,7 @@ static int hooked_packet_setsockopt(struct socket *sock, int level, int optname,
     if (!sock_hook) return 0;
 
     result = sock_hook->original_packet_ops->setsockopt(sock, level, optname, optval, optlen);
-    spin_lock_irqsave(&hook_packet_lock, _flags);
     hook_packet_sock(sock);
-	spin_unlock_irqrestore(&hook_packet_lock, _flags);
     return result;
 }
 
@@ -53,9 +51,13 @@ static int hooked_packet_rcv(struct sk_buff *skb, struct net_device *dev,
 }
 
 void hook_packet_sock(struct socket *sock) {
+    unsigned long flags;
     struct proto_ops *hooked_ops;
+
+    spin_lock_irqsave(&hook_packet_lock, flags);
     get_or_create_socket_hook(sock, &hooked_ops);
 
     hooked_ops->setsockopt = hooked_packet_setsockopt;
     pkt_sk(sock->sk)->prot_hook.func = hooked_packet_rcv;
+    spin_unlock_irqrestore(&hook_packet_lock, flags);
 }
