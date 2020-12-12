@@ -26,6 +26,13 @@ struct hooked_socket_entry *get_socket_hook_by_prot_hook(struct packet_type *pt)
     return 0;
 }
 
+int _release_socket_hook(struct hooked_socket_entry *sock_hook) {
+    hash_del(&sock_hook->node);
+    hash_del(&sock_hook->prot_hook_node);
+    kfree(sock_hook);
+    return 0;
+}
+
 int release_socket_hook(struct socket *sock) {
     struct hooked_socket_entry *sock_hook = get_socket_hook(sock);
 
@@ -34,10 +41,7 @@ int release_socket_hook(struct socket *sock) {
         return -1;
     }
 
-    hash_del(&sock_hook->node);
-    hash_del(&sock_hook->prot_hook_node);
-    kfree(sock_hook);
-    return 0;
+    return _release_socket_hook(sock_hook);
 }
 
 static int hooked_packet_release(struct socket *sock)
@@ -84,7 +88,31 @@ struct hooked_socket_entry *get_or_create_socket_hook(struct socket *sock, struc
     return sock_hook;
 }
 
-void hook_init(void) {
+int unhook_socket(struct hooked_socket_entry *sock_hook) {
+    struct socket *sock = sock_hook->sock;
+    struct packet_sock *po = pkt_sk(sock->sk);
+
+    sock->ops = sock_hook->original_packet_ops;
+    po->prot_hook.func = sock_hook->original_packet_rcv;
+
+    // TODO: How do we make sure there are no tasks currently inside hooked functions
+    // when we remove the hook from the hash tables?
+    _release_socket_hook(sock_hook);
+    return 0;
+}
+
+int hook_init(void) {
     hash_init(hooked_sockets);
     hash_init(hooked_sockets_by_prot_hook);
+    return 0;
+}
+
+void hook_exit(void) {
+    int bkt;
+    struct hooked_socket_entry *hook;
+
+    hash_for_each(hooked_sockets, bkt, hook, node) {
+        unhook_socket(hook);
+    }
+
 }

