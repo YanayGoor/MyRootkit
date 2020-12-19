@@ -22,7 +22,7 @@ int hooked_wake_up(struct wait_queue_entry *wq_entry, unsigned mode, int flags, 
     return 0;
 }
 
-#define FIFO_SIZE 32
+#define FIFO_SIZE 8
 
 static DECLARE_KFIFO(unhooked_sockets, struct socket *, FIFO_SIZE);
 static DEFINE_SPINLOCK(read_lock);
@@ -31,10 +31,33 @@ static DEFINE_SPINLOCK(write_lock);
 static const struct super_operations *original_s_op;
 static const struct dentry_operations *original_s_d_op;
 
+static int put_unhooked_socket(struct socket *sock) {
+    int res;
+    unsigned long flags;
+    spin_lock_irqsave(&write_lock, flags);
+    res = kfifo_put(&unhooked_sockets, sock);
+    spin_unlock_irqrestore(&write_lock, flags);
+    return res;
+}
+
+static int get_unhooked_socket(struct socket **sock) {
+    int res;
+    unsigned long flags;
+    spin_lock_irqsave(&read_lock, flags);
+    res = kfifo_get(&unhooked_sockets, sock);
+    spin_unlock_irqrestore(&read_lock, flags);
+    return res;
+}
+
+static int sock_is_ready(struct socket *sock) {
+    // when we hook into packet sockets, we want these to be
+    // initializated, otherwise our values might get overriden.
+    return sock->ops && pkt_sk(sock->sk)->prot_hook.func;
+}
+
 static struct inode *hooked_alloc_inode(struct super_block *sb) {
     struct inode *res;
     struct socket *sock;
-    unsigned long flags;
     struct wait_queue_entry *wq;
 
     // TODO: panic
@@ -49,28 +72,29 @@ static struct inode *hooked_alloc_inode(struct super_block *sb) {
     add_wait_queue(&sock->wq.wait, wq);
 
     /* Add to unhooked queue */
-    spin_lock_irqsave(&write_lock, flags);
-    kfifo_put(&unhooked_sockets, sock);
-    spin_unlock_irqrestore(&write_lock, flags);
+    put_unhooked_socket(sock);
     return res;
 }
 
 
 static int hooked_d_init(struct dentry *dentry)
 {
-    struct socket *sock;
-    unsigned long flags;
     int res;
+    struct socket *sock;
 
-    /* Handle unhooked queue */
-    while (!kfifo_is_empty(&unhooked_sockets)) {
-        spin_lock_irqsave(&read_lock, flags);
-        res = kfifo_get(&unhooked_sockets, &sock);
-        spin_unlock_irqrestore(&read_lock, flags);
+    // The socket that caused this invocation of "d_init" should already be in the queue.
+    int max_index = unhooked_sockets.kfifo.in;
+
+    while (unhooked_sockets.kfifo.out < max_index) {
+        res = get_unhooked_socket(&sock);
         if (!res) break;
 
-        // TODO: Only do this if the socket is ready to patch (it has ops and recv function.)
-        if (is_packet_sock(sock)) {
+        if (!is_packet_sock(sock)) continue;
+        // If the socket is not "ready" it means it is not our socket, 
+        // so we return it to the queue.
+        if (!sock_is_ready(sock)) {
+            put_unhooked_socket(sock);
+        } else {
             hook_packet_sock(sock);
         }
     }	
