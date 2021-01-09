@@ -1,0 +1,6 @@
+userkit
+
+*.o
+
+*.so
+*.so.*
