@@ -1,5 +1,7 @@
 userkit
 
+lib/
+
 *.o
 
 *.so
