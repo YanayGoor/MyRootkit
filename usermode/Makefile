@@ -10,7 +10,7 @@ PICOTCP_LIB?=$(PICOTCP_DIR)/build/lib/libpicotcp.a
 
 CFLAGS?=-I$(INCLUDE_DIR) -I$(PICOTCP_HEADERS)
 
-OBJ=src/main.o
+OBJ=src/main.o src/pico.obj
 
 build: $(OUTPUT)
 
