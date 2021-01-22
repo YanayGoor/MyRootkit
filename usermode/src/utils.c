@@ -26,9 +26,8 @@ int __utils_color_console(const char *color) {
     return 0;
 }
 
-void __utils_reset_color(int *i) {
+void __utils_reset_color() {
     printf("\033[0m");
     fflush(stdout);
-    (*i)++;
 }
 
