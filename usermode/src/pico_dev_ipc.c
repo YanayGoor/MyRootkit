@@ -24,7 +24,6 @@ static int ipc_connect(const char *sock_path, const size_t sock_path_len)
 {
     struct sockaddr_un addr;
     int ipc_fd;
-    size_t addr_len = min(sock_path_len, sizeof(addr.sun_path) - 1);
 
     if((ipc_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0)) < 0) {
         return(-1);
@@ -33,7 +32,7 @@ static int ipc_connect(const char *sock_path, const size_t sock_path_len)
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
 
-    memcpy(addr.sun_path, sock_path, addr_len);
+    memcpy(addr.sun_path, sock_path,  min(sock_path_len, sizeof(addr.sun_path) - 1));
     addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
 
     if(connect(ipc_fd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un)) < 0) {
