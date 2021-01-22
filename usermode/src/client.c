@@ -4,7 +4,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <pico.h>
+
+#include "pico.h"
+#include "utils.h"
 
 union pipefds {
     struct {
@@ -19,31 +21,15 @@ int main(int argc, char *argv[]) {
     union pipefds from_child;
     char buff[1024];
     size_t size;
-    struct pollfd pfd[2]; 
-    struct pico_socket *sock;
+    struct pollfd pfd[1];
+    int err;
 
-    int port;
-    int dst_port;
+    init_pico();
 
-    if (argc != 4) {
-        printf("Wrong amount of arguments.\n");
-        printf("Usage: %s [PORT] [DST_HOST] [DST_PORT]\n", argv[0]);
-        return 2;
+    if ((err = create_pico_client())) {
+        mrklog("result: %d\n", err);
+        return 1;
     }
-
-    port = atoi(argv[1]);
-    if (port < 1 || port >> 16) {
-        printf("Invalid port\n");
-        return 3;
-    }
-
-    dst_port = atoi(argv[3]);
-    if (dst_port < 1 || dst_port >> 16) {
-        printf("Invalid dst port\n");
-        return 4;
-    }
-
-    sock = create_socket((uint16_t)port, argv[1], (uint16_t)dst_port);
 
     if (pipe(to_child.fds) == -1) return 1;
     if (pipe(from_child.fds) == -1) return 1;
@@ -55,18 +41,24 @@ int main(int argc, char *argv[]) {
             .fd = from_child.read,
             .events = POLLIN,
         };
-        pfd[1] = (struct pollfd) {
-            .fd = STDOUT_FILENO,
-            .events = POLLIN,
-        };
         while(1) {
-            poll(pfd, 2, 1000);
+            tick_pico_stack();
+            poll(pfd, 1, 100);
             if (pfd[0].revents & POLLIN) {
                 size = read(from_child.read, buff, 1024);
-                fwrite(buff, size, 1, stdout);
+                using_color(COLOR_CYAN) {
+                    printf("Sending back: \"\"\"\n");
+                    fwrite(buff, size, 1, stdout);
+                    printf("\"\"\"\n");
+                }
+                pico_sock_write(buff, size);
             }
-            if (pfd[1].revents & POLLIN) {
-                size = read(STDIN_FILENO, buff, 1024);
+            size = pico_sock_read(buff, 1024);
+            if (size) {
+                using_color(COLOR_CYAN) {
+                    printf("Received: ");
+                    fwrite(buff, size, 1, stdout);
+                }
                 write(to_child.write, buff, size);
             }
         }
@@ -78,7 +70,7 @@ int main(int argc, char *argv[]) {
         dup2(to_child.read, STDIN_FILENO);
         
         execl("/bin/bash","/bin/bash", NULL);
-        printf("failed to execl\n");
+        mrklog("failed to execl\n");
         return 1;  
     }
     
