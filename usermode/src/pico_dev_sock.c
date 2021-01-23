@@ -22,7 +22,6 @@ static int pico_sock_dev_send(struct pico_device *dev, void *buf, int len)
     char *prefixed_buf = PICO_ZALLOC(len + strlen(sdev->prefix));
     strcpy(prefixed_buf, sdev->prefix);
     memcpy(prefixed_buf + strlen(sdev->prefix), buf, len);
-    printf("sending..\n");
     res = (int)write(sdev->fd, prefixed_buf, (uint32_t)(len + strlen(sdev->prefix)));
     PICO_FREE(prefixed_buf);
     return res;
@@ -43,8 +42,6 @@ static int pico_sock_dev_poll(struct pico_device *dev, int loop_score)
 
         len = (int)read(sdev->fd, buf, SOCK_DEV_MTU);
         if (len > 0) {
-            printf("got packets with prefix len %d\n", (uint32_t)(len - strlen(sdev->prefix)));
-            printf("0 - %d\n", *(buf + 2));
             loop_score--;
             pico_stack_recv(dev, buf + strlen(sdev->prefix), (uint32_t)(len - strlen(sdev->prefix)));
         }
