@@ -45,7 +45,9 @@ static void poll_shell_work(struct work_struct *work) {
 
     res = kernel_recvmsg(data->sock, &msg, &iov, 1, SOCK_DEV_MTU, MSG_DONTWAIT);
     if (res < 0) {
-        printk("Error receiving from unix sock - %d\n", res);
+        if (res != -11) {
+            printk("Error receiving from unix sock - %d\n", res);
+        }
     } else {
         res = send_response(data->st->origin, buff, res);
     }
@@ -89,6 +91,7 @@ int open_shell(struct open_stream *st) {
 
     INIT_WORK(&data->work, poll_shell_work);
     st->data = data;
+    data->st = st;
 
     schedule_work(&data->work);
 

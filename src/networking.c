@@ -81,18 +81,18 @@ int send_response(
         return -1;
     }
     skb_reserve(skb, RESPONSE_HEADER_LEN);
-    data = skb_put(skb, RESPONSE_DATA_LEN);
+    data = skb_put(skb, sizeof(origin.job_id) + response_len);
 
     // put response data.
-    *(unsigned short *)data = origin.job_id;
-    memcpy(data + 2, response, response_len);
+    memcpy(data, &origin.job_id, sizeof(origin.job_id));
+    memcpy(data + sizeof(origin.job_id), response, response_len);
 
     skb_push(skb, sizeof(struct udphdr));
     skb_reset_transport_header(skb);
     udph = udp_hdr(skb);
     udph->source = htons(CMD_PORT);
     udph->dest = origin.remote_port;
-    udph->len = htons(RESPONSE_DATA_LEN + sizeof(struct udphdr));
+    udph->len = htons(sizeof(origin.job_id) + response_len + sizeof(struct udphdr));
     udph->check = 0;
     udph->check = csum_tcpudp_magic(
         origin.local_addr,
@@ -101,7 +101,7 @@ int send_response(
         IPPROTO_UDP,
         csum_partial(
             udph,
-            RESPONSE_DATA_LEN + sizeof(struct udphdr),
+            sizeof(origin.job_id) + response_len + sizeof(struct udphdr),
             0
         )
     );
@@ -114,7 +114,7 @@ int send_response(
     iph->version = IPVERSION;
     iph->ihl = sizeof(struct iphdr) / 4;
     iph->tos = 0;
-    iph->tot_len = htons(RESPONSE_DATA_LEN + sizeof(struct udphdr) + sizeof(struct iphdr));
+    iph->tot_len = htons(sizeof(origin.job_id) + response_len + sizeof(struct udphdr) + sizeof(struct iphdr));
     iph->id       = 0;
     iph->frag_off = 0;
     iph->ttl      = IPDEFTTL;

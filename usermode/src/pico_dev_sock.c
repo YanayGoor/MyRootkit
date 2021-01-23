@@ -82,7 +82,7 @@ struct pico_device *pico_sock_dev_create(int sock_fd, const char *name, const ui
 
     sdev->dev.overhead = 0;
     sdev->fd = sock_fd;
-    sdev->prefix = NULL;
+    sdev->prefix = "";
     sdev->dev.send = pico_sock_dev_send;
     sdev->dev.poll = pico_sock_dev_poll;
     sdev->dev.destroy = pico_sock_dev_destroy;
