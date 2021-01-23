@@ -22,6 +22,7 @@ static int pico_sock_dev_send(struct pico_device *dev, void *buf, int len)
     char *prefixed_buf = PICO_ZALLOC(len + strlen(sdev->prefix));
     strcpy(prefixed_buf, sdev->prefix);
     memcpy(prefixed_buf + strlen(sdev->prefix), buf, len);
+    printf("sending..\n");
     res = (int)write(sdev->fd, prefixed_buf, (uint32_t)(len + strlen(sdev->prefix)));
     PICO_FREE(prefixed_buf);
     return res;
@@ -38,9 +39,12 @@ static int pico_sock_dev_poll(struct pico_device *dev, int loop_score)
     do  {
         if (poll(&pfd, 1, 0) <= 0)
             return loop_score;
+   
 
         len = (int)read(sdev->fd, buf, SOCK_DEV_MTU);
         if (len > 0) {
+            printf("got packets with prefix len %d\n", (uint32_t)(len - strlen(sdev->prefix)));
+            printf("0 - %d\n", *(buf + 2));
             loop_score--;
             pico_stack_recv(dev, buf + strlen(sdev->prefix), (uint32_t)(len - strlen(sdev->prefix)));
         }
@@ -58,7 +62,8 @@ struct pico_device *pico_prefixed_sock_dev_create(int sock_fd, const char *prefi
     struct pico_device *dev = pico_sock_dev_create(sock_fd, name, mac);
     struct pico_device_sock *sdev = (struct pico_device_sock *) dev;
 
-    if (sdev) {
+    if (sdev) {	    
+        printf("yes - %ld\n", strlen(prefix));
         sdev->prefix = prefix;
         sdev->dev.mtu = SOCK_DEV_MTU - strlen(prefix);
     }

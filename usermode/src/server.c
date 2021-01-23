@@ -42,7 +42,7 @@ int start_server(int sock_fd, const char *prefix) {
 
     init_pico();
 
-    if ((err = create_pico_server(sock_fd, ""))) {
+    if ((err = create_pico_server(sock_fd, prefix))) {
         printf("result: %d\nerrno: %d\n", err, errno);
         return 1;
     }

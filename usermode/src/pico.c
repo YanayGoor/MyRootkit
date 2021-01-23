@@ -127,11 +127,12 @@ int create_pico_server(int fd, const char *prefix) {
     mrklog("Pico server: sock listening...\n");
 
     while (!servsock->number_of_pending_conn) {
-        mrklog("Pico server: awaiting pending connections (currently %d)...\n", servsock->number_of_pending_conn);
+        //mrklog("Pico server: awaiting pending connections (currently %d)...\n", servsock->number_of_pending_conn);
         pico_stack_tick();
     }
+    mrklog("Pico server: awaiting connection...\n");
     while (!sock) {
-        mrklog("Pico server: awaiting connection...\n");
+        //mrklog("Pico server: awaiting connection...\n");
         sock = pico_socket_accept(servsock, &other_addr, &other_port);
         if (pico_err && pico_err != 11) goto fail_socket;
         pico_stack_tick();
