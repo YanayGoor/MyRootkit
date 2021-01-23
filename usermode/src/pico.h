@@ -6,7 +6,7 @@
 void init_pico();
 
 int create_pico_client();
-int create_pico_server();
+int create_pico_server(int sock_fd, const char *prefix);
 
 void tick_pico_stack(void);
 int pico_sock_write(const void *buf, int len);

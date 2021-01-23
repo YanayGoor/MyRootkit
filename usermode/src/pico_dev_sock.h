@@ -10,9 +10,11 @@
 struct pico_device_sock {
     struct pico_device dev;
     int fd;
+    const char *prefix;
 };
 
 void pico_sock_dev_destroy(struct pico_device *dev);
 struct pico_device *pico_sock_dev_create(int sock_fd, const char *name, const uint8_t *mac);
+struct pico_device *pico_prefixed_sock_dev_create(int sock_fd, const char *prefix, const char *name, const uint8_t *mac);
 
 #endif

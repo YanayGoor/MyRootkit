@@ -34,37 +34,15 @@ static int ipc_connect(int ipc_fd, const char *sock_path, const size_t sock_path
     return 0;
 }
 
-int main() {
+int start_server(int sock_fd, const char *prefix) {
     int err;
-    int srvsock;
-    int sock;
     struct pollfd pfd[1];
     size_t size;
     char buff[1024];
 
     init_pico();
 
-    if ((srvsock = socket(AF_UNIX, SOCK_SEQPACKET, 0)) < 0) {
-        return 1;
-    }
-    mrklog("unix sock created\n");
-
-    if (ipc_connect(srvsock, SOCK_PATH, SOCK_PATH_LEN)) {
-        return 1;
-    }
-    mrklog("unix sock bound\n");
-
-    if (listen(srvsock, 1) < 0) {
-        return 1;
-    }
-    mrklog("unix sock listening\n");
-
-    if ((sock = accept(srvsock, NULL, NULL)) < 0) {
-        return 1;
-    }
-    mrklog("unix sock accepted connection\n");
-
-    if ((err = create_pico_server(sock))) {
+    if ((err = create_pico_server(sock_fd, ""))) {
         printf("result: %d\nerrno: %d\n", err, errno);
         return 1;
     }
@@ -94,3 +72,33 @@ int main() {
 
     return 0;
 }
+
+int main() {
+    int srvsock;
+    int sock;
+
+    init_pico();
+
+    if ((srvsock = socket(AF_UNIX, SOCK_SEQPACKET, 0)) < 0) {
+        return 1;
+    }
+    mrklog("unix sock created\n");
+
+    if (ipc_connect(srvsock, SOCK_PATH, SOCK_PATH_LEN)) {
+        return 1;
+    }
+    mrklog("unix sock bound\n");
+
+    if (listen(srvsock, 1) < 0) {
+        return 1;
+    }
+    mrklog("unix sock listening\n");
+
+    if ((sock = accept(srvsock, NULL, NULL)) < 0) {
+        return 1;
+    }
+    mrklog("unix sock accepted connection\n");
+
+    return start_server(sock, "");
+}
+

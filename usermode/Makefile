@@ -14,7 +14,7 @@ CLI_OBJ=src/client.o $(OBJ)
 SRV_OBJ=src/server.o $(OBJ)
 
 CLIENT?=client
-SERVER?=server
+SERVER?=server.so
 
 build: $(CLIENT) $(SERVER)
 
@@ -24,16 +24,16 @@ lib:
 # I don't use PICOTCP_LIB here in case the user wants to override it, 
 # in which case we do not want to compile picotcp again.
 $(PICOTCP_DIR)/build/lib/libpicotcp.a:
-	$(MAKE) -C $(PICOTCP_DIR) PREFIX=build IPC=1 IPV6=0 ICMP4=0
+	$(MAKE) -C $(PICOTCP_DIR) PREFIX=build IPC=1 IPV6=0 ICMP4=0 ARCH=shared
 
 $(CLIENT): $(PICOTCP_LIB) $(CLI_OBJ)
 	$(CC) -o $@ -L$(PICOTCP_DIR)/build/lib $(CLI_OBJ) -lpicotcp
 
 $(SERVER): $(PICOTCP_LIB) $(SRV_OBJ)
-	$(CC) -o $@ -L$(PICOTCP_DIR)/build/lib $(SRV_OBJ) -lpicotcp
+	$(CC) -shared -o $@ -L$(PICOTCP_DIR)/build/lib $(SRV_OBJ) -lpicotcp
 
 %.o: %.c
-	$(CC) -Wall -c -o $@ $< $(CFLAGS)
+	$(CC) -Wall -fPIC -c -o $@ $< $(CFLAGS)
 
 .PHONY: clean build debug install
 

@@ -164,15 +164,16 @@ static void handle_command(struct work_struct *work) {
         stream->type = command_work->cmd->stream;
         hash_add(open_streams, &stream->node, command_work->origin.job_id);
         stream->type.open(stream);
+        result[0] = 0;
     } else {
         result[0] = command_work->cmd->func(command_work->arg);
-        printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
-        send_response(
-            command_work->origin,
-            result,
-            sizeof(result)
-        );
     }
+    printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
+    send_response(
+        command_work->origin,
+        result,
+        sizeof(result)
+    );
     
 done:
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
