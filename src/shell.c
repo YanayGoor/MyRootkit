@@ -50,9 +50,9 @@ static void poll_shell_work(struct work_struct *work) {
         }
     } else if (res) {
         res = send_response(data->st->origin, buff, res);
-    }
-    if (res) {
-        printk("Error sending out - %d\n", res);
+        if (res) {
+            printk("Error sending out - %d\n", res);
+        }
     }
 
 done:  
