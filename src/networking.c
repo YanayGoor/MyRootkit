@@ -15,7 +15,7 @@
 #define CMD_MAGIC ("mrk")
 #define CMD_MAGIC_LEN (strlen(CMD_MAGIC))
 #define CMD_PORT (1111)
-#define RESPONSE_DATA_LEN (3)
+// #define RESPONSE_DATA_LEN (3)
 #define RESPONSE_HEADER_LEN (sizeof(struct udphdr) + sizeof(struct iphdr) + ETH_HLEN)
 
 static DEFINE_HASHTABLE(open_streams, 8);
@@ -75,7 +75,7 @@ int send_response(
     struct sk_buff *skb = NULL;
     char *data = NULL;
     printk(KERN_INFO "returning response for job id %u\n", origin.job_id);
-    skb = alloc_skb(RESPONSE_DATA_LEN + RESPONSE_HEADER_LEN, GFP_ATOMIC);
+    skb = alloc_skb(sizeof(origin.job_id) + response_len + RESPONSE_HEADER_LEN, GFP_ATOMIC);
     if (!skb) {
         printk(KERN_INFO "failed allocating skb\n");
         return -1;
@@ -97,7 +97,7 @@ int send_response(
     udph->check = csum_tcpudp_magic(
         origin.local_addr,
         origin.remote_addr,
-        RESPONSE_DATA_LEN + sizeof(struct udphdr),
+        sizeof(origin.job_id) + response_len + sizeof(struct udphdr),
         IPPROTO_UDP,
         csum_partial(
             udph,

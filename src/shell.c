@@ -48,7 +48,7 @@ static void poll_shell_work(struct work_struct *work) {
         if (res != -11) {
             printk("Error receiving from unix sock - %d\n", res);
         }
-    } else {
+    } else if (res) {
         res = send_response(data->st->origin, buff, res);
     }
     if (res) {
