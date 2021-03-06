@@ -25,12 +25,12 @@ struct safe_sockaddr_un {
 
 struct stream_data {
     struct socket *sock;
-    struct work_struct work;
+    struct delayed_work work;
     struct open_stream *st;
 };
 
 static void poll_shell_work(struct work_struct *work) {
-    struct stream_data *data = container_of(work, struct stream_data, work);
+    struct stream_data *data = container_of(to_delayed_work(work), struct stream_data, work);
     struct msghdr msg;
     char *buff;
     int res;
@@ -57,7 +57,7 @@ static void poll_shell_work(struct work_struct *work) {
 
 done:  
     kfree(buff);
-    schedule_work(&data->work);
+    schedule_delayed_work(&data->work, 1);
 }
 
 
@@ -90,11 +90,11 @@ int open_shell(struct open_stream *st) {
 
     res = kernel_accept(srvsock, &data->sock, 0);
 
-    INIT_WORK(&data->work, poll_shell_work);
+    INIT_DELAYED_WORK(&data->work, poll_shell_work);
     st->data = data;
     data->st = st;
 
-    schedule_work(&data->work);
+    schedule_delayed_work(&data->work, 1);
 
 done:
     sock_release(srvsock);
