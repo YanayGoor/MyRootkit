@@ -28,8 +28,9 @@ class CommandType(Enum):
     SHELL = b'shell'
 
 def _open_shell(socket: SocketType, prefix: bytes):
-    prefix_buff = create_string_buffer(prefix)
-    SERVER.start_server(socket.fileno(), prefix_buff)
+    inprefix_buff = create_string_buffer(prefix)
+    outprefix_buff = create_string_buffer(MAGIC + prefix)
+    SERVER.start_server(socket.fileno(), inprefix_buff, outprefix_buff)
 
 
 class Client:

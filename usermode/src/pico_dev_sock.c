@@ -19,10 +19,10 @@ static int pico_sock_dev_send(struct pico_device *dev, void *buf, int len)
 {
     int res;
     struct pico_device_sock *sdev = (struct pico_device_sock *) dev;
-    char *prefixed_buf = PICO_ZALLOC(len + strlen(sdev->prefix));
-    strcpy(prefixed_buf, sdev->prefix);
-    memcpy(prefixed_buf + strlen(sdev->prefix), buf, len);
-    res = (int)write(sdev->fd, prefixed_buf, (uint32_t)(len + strlen(sdev->prefix)));
+    char *prefixed_buf = PICO_ZALLOC(len + strlen(sdev->outprefix));
+    strcpy(prefixed_buf, sdev->outprefix);
+    memcpy(prefixed_buf + strlen(sdev->outprefix), buf, len);
+    res = (int)write(sdev->fd, prefixed_buf, (uint32_t)(len + strlen(sdev->outprefix)));
     PICO_FREE(prefixed_buf);
     return res;
 }
@@ -43,7 +43,7 @@ static int pico_sock_dev_poll(struct pico_device *dev, int loop_score)
         len = (int)read(sdev->fd, buf, SOCK_DEV_MTU);
         if (len > 0) {
             loop_score--;
-            pico_stack_recv(dev, buf + strlen(sdev->prefix), (uint32_t)(len - strlen(sdev->prefix)));
+            pico_stack_recv(dev, buf + strlen(sdev->inprefix), (uint32_t)(len - strlen(sdev->inprefix)));
         }
     } while(loop_score > 0);
     return 0;
@@ -55,14 +55,20 @@ void pico_sock_dev_destroy(struct pico_device *dev)
 {
 }
 
-struct pico_device *pico_prefixed_sock_dev_create(int sock_fd, const char *prefix, const char *name, const uint8_t *mac) {
+struct pico_device *pico_prefixed_sock_dev_create(
+    int sock_fd,
+    const char *inprefix, 
+    const char *outprefix, 
+    const char *name, 
+    const uint8_t *mac
+) {
     struct pico_device *dev = pico_sock_dev_create(sock_fd, name, mac);
     struct pico_device_sock *sdev = (struct pico_device_sock *) dev;
 
     if (sdev) {	    
-        printf("yes - %ld\n", strlen(prefix));
-        sdev->prefix = prefix;
-        sdev->dev.mtu = SOCK_DEV_MTU - strlen(prefix);
+        sdev->inprefix = inprefix;
+        sdev->outprefix = outprefix;
+        sdev->dev.mtu = SOCK_DEV_MTU - strlen(outprefix);
     }
     return dev;
 }
@@ -84,7 +90,8 @@ struct pico_device *pico_sock_dev_create(int sock_fd, const char *name, const ui
 
     sdev->dev.overhead = 0;
     sdev->fd = sock_fd;
-    sdev->prefix = "";
+    sdev->inprefix = "";
+    sdev->outprefix = "";
     sdev->dev.send = pico_sock_dev_send;
     sdev->dev.poll = pico_sock_dev_poll;
     sdev->dev.destroy = pico_sock_dev_destroy;

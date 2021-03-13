@@ -97,7 +97,7 @@ fail_device:
     return -1;
 }
 
-int create_pico_server(int fd, const char *prefix) {
+int create_pico_server(int fd, const char *inprefix, const char *outprefix) {
     uint16_t local_port = SERVER_PORT;
     struct pico_ip4 local_addr = SERVER_ADDR;
     struct pico_ip4 other_addr;
@@ -108,7 +108,7 @@ int create_pico_server(int fd, const char *prefix) {
 
     /* create the tap device */
     using_color(COLOR_GRAY) {
-        if (!(dev = pico_prefixed_sock_dev_create(fd, prefix, DEV_NAME, NULL))) {
+        if (!(dev = pico_prefixed_sock_dev_create(fd, inprefix, outprefix, DEV_NAME, NULL))) {
             return -1;
         }
 
