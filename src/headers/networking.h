@@ -40,4 +40,6 @@ int send_response(
     size_t response_len
 );
 
+void close_stream(struct open_stream *stream);
+
 #endif /* NETWORKING_H */

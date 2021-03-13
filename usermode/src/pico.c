@@ -5,6 +5,10 @@
 #include <pico_protocol.h>
 #include <pico_ipv4.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
 #include "pico.h"
 #include "utils.h"
 #include "pico_dev_ipc.h"
@@ -12,6 +16,7 @@
 
 struct pico_socket *sock;
 short sock_readable;
+short sock_disconnected;
 
 #define CLIENT_ADDR ((struct pico_ip4){.addr=0x01010101})
 #define CLIENT_PORT ((uint16_t)1024)
@@ -29,6 +34,8 @@ void dummy_cb(uint16_t ev, struct pico_socket *s)
 
     if (ev & PICO_SOCK_EV_RD) {
         sock_readable = 1;
+    } else if (ev & PICO_SOCK_EV_ERR && pico_err == PICO_ERR_ECONNRESET) {
+        sock_disconnected = 1;
     }
 }
 
@@ -44,6 +51,8 @@ int create_pico_client(void) {
     struct pico_ip4 dst_addr = SERVER_ADDR;
     struct pico_device *dev;
     int res;
+    int optval = 2900;
+    int retryoptval = 3;
 
     /* create the tap device */
     using_color(COLOR_GRAY) {
@@ -62,6 +71,10 @@ int create_pico_client(void) {
     }
     mrklog("Pico client: sock opened.\n");
 
+    pico_socket_setoption(sock, PICO_SOCKET_OPT_KEEPIDLE, &optval);
+    pico_socket_setoption(sock, PICO_SOCKET_OPT_KEEPINTVL, &optval);
+    pico_socket_setoption(sock, PICO_SOCKET_OPT_KEEPCNT, &retryoptval);
+
     if ((res = pico_socket_bind(sock, &local_addr, &local_port))) {
         goto fail_socket;
     }
@@ -72,12 +85,6 @@ int create_pico_client(void) {
     }
     mrklog("Pico client: sock connected.\n");
 
-    // if ((res = pico_socket_write(sock, "hello there\n", 13))) {
-    //     goto fail_socket;
-    // }
-    // mrklog("Pico client: sock written.\n");
-
-    //return sock;
     return 0;
 
 fail_socket:
@@ -139,11 +146,6 @@ int create_pico_server(int fd, const char *prefix) {
     }
     mrklog("Pico server: sock accepted connection.\n");
 
-    // if ((res = pico_socket_write(sock, "hello there\n", 13))) {
-    //     goto fail_socket;
-    // }
-    // mrklog("Pico client: sock written.\n");
-
     return 0;
 
 fail_socket:
@@ -165,6 +167,7 @@ int pico_sock_write(const void *buf, int len) {
 }
 
 int pico_sock_read(void *buf, int len) {
+    if (sock_disconnected) return -1;
     if (!sock_readable) return 0;
     return pico_socket_read(sock, buf, len);
 }

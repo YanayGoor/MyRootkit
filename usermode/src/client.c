@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
     union pipefds to_child;
     union pipefds from_child;
     char buff[1024];
-    size_t size;
+    int size;
     struct pollfd pfd[1];
     int err;
 
@@ -41,7 +41,7 @@ int main(int argc, char *argv[]) {
             .fd = from_child.read,
             .events = POLLIN,
         };
-        while(1) {
+        while(size >= 0) {
             tick_pico_stack();
             poll(pfd, 1, 100);
             if (pfd[0].revents & POLLIN) {
@@ -54,7 +54,7 @@ int main(int argc, char *argv[]) {
                 pico_sock_write(buff, size);
             }
             size = pico_sock_read(buff, 1024);
-            if (size) {
+            if (size > 0) {
                 using_color(COLOR_CYAN) {
                     printf("Received: ");
                     fwrite(buff, size, 1, stdout);

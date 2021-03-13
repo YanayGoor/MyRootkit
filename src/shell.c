@@ -45,15 +45,18 @@ static void poll_shell_work(struct work_struct *work) {
     iov.iov_base = buff;
 
     res = kernel_recvmsg(data->sock, &msg, &iov, 1, SOCK_DEV_MTU, MSG_DONTWAIT);
-    if (res < 0) {
-        if (res != -11) {
-            printk("Error receiving from unix sock - %d\n", res);
-        }
-    } else if (res) {
+    if (res == 0) {
+        printk("Unix sock disconnected\n");
+        close_stream(data->st);
+        printk("closed stream\n");
+        return;
+    } else if (res > 0) {
         res = send_response(data->st->origin, buff, res);
         if (res) {
             printk("Error sending out - %d\n", res);
         }
+    } else if (res != -11) {
+        printk("Error receiving from unix sock - %d\n", res);
     }
 
 done:  
@@ -123,7 +126,7 @@ int recv_shell(struct open_stream *st, char *buff, size_t len) {
 
 int close_shell(struct open_stream *st) {
     if (st->data) {
-        sock_release((struct socket *)st->data);
+        sock_release(((struct stream_data *)st->data)->sock);
     }
     kfree(st->data);
     return 0;

