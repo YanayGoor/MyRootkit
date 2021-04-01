@@ -24,6 +24,11 @@ int main(int argc, char *argv[]) {
     struct pollfd pfd[1];
     int err;
 
+    // make std* constistent when used as usemodehelper
+    open("/dev/null", O_RDONLY);
+    open("/dev/null", O_WRONLY);
+    open("/dev/null", O_WRONLY);
+
     init_pico();
 
     if ((err = create_pico_client())) {

@@ -134,7 +134,7 @@ int create_pico_server(int fd, const char *inprefix, const char *outprefix) {
     mrklog("Pico server: sock listening...\n");
 
     while (!servsock->number_of_pending_conn) {
-        //mrklog("Pico server: awaiting pending connections (currently %d)...\n", servsock->number_of_pending_conn);
+        // mrklog("Pico server: awaiting pending connections (currently %d)...\n", servsock->number_of_pending_conn);
         pico_stack_tick();
     }
     mrklog("Pico server: awaiting connection...\n");

