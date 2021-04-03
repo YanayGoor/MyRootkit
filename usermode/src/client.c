@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <string.h>
 
 #include "pico.h"
 #include "utils.h"
@@ -31,7 +32,13 @@ int main(int argc, char *argv[]) {
 
     init_pico();
 
-    if ((err = create_pico_client())) {
+    if (argc != 2) return -1;
+
+    // add leading zero byte
+    char *path = calloc(1, strlen(argv[1]) + 2);
+    strcpy(path + 1, argv[1]);
+
+    if ((err = create_pico_client(path, strlen(argv[1]) + 2))) {
         mrklog("result: %d\n", err);
         return 1;
     }
@@ -79,5 +86,6 @@ int main(int argc, char *argv[]) {
         return 1;  
     }
     
+    free(path);
     return 0;
 }
