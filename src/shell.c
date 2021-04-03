@@ -4,8 +4,6 @@
 #include <linux/socket.h>
 #include <linux/net.h>
 #include <linux/umh.h>
-#include <linux/pipe_fs_i.h>
-#include <linux/file.h>
 #include <linux/un.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
@@ -87,10 +85,7 @@ static int start_usermode_shell(job_id_t job_id) {
     // this means the helpers can be tracked or disabled.
     info->path = USERMODE_HELPER_PATH;
 
-    if ((err =  call_usermodehelper_exec(info, UMH_KILLABLE))) {
-        return err;
-    }
-    return 0;
+    return call_usermodehelper_exec(info, UMH_KILLABLE);
 }
 
 static void poll_shell_work(struct work_struct *work) {

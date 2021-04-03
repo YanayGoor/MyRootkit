@@ -1,7 +1,6 @@
 import sys
 import random
 import struct
-import signal
 from argparse import ArgumentParser
 from enum import Enum
 from threading import Condition, Thread
