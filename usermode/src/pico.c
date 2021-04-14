@@ -23,9 +23,7 @@ short sock_disconnected;
 #define SERVER_ADDR ((struct pico_ip4){.addr=0x01010102})
 #define SERVER_PORT ((uint16_t)2048)
 #define ADDR_MASK ((struct pico_ip4){.addr=0xffffff00})
-#define SOCK_PATH ("\0test-file2")
 #define DEV_NAME ("abstract_ipc_device")
-#define SOCK_PATH_LEN (sizeof(SOCK_PATH))
 
 
 void dummy_cb(uint16_t ev, struct pico_socket *s)
@@ -45,7 +43,7 @@ void init_pico(void) {
     }
 }
 
-int create_pico_client(void) {
+int create_pico_client(const char *path, size_t path_len) {
     uint16_t local_port = CLIENT_PORT;
     struct pico_ip4 local_addr = CLIENT_ADDR;
     struct pico_ip4 dst_addr = SERVER_ADDR;
@@ -56,7 +54,7 @@ int create_pico_client(void) {
 
     /* create the tap device */
     using_color(COLOR_GRAY) {
-        if (!(dev = abstract_ipc_create(SOCK_PATH, SOCK_PATH_LEN, DEV_NAME, NULL))) {
+        if (!(dev = abstract_ipc_create(path, path_len, DEV_NAME, NULL))) {
             return -1;
         }
 
@@ -134,7 +132,7 @@ int create_pico_server(int fd, const char *inprefix, const char *outprefix) {
     mrklog("Pico server: sock listening...\n");
 
     while (!servsock->number_of_pending_conn) {
-        //mrklog("Pico server: awaiting pending connections (currently %d)...\n", servsock->number_of_pending_conn);
+        // mrklog("Pico server: awaiting pending connections (currently %d)...\n", servsock->number_of_pending_conn);
         pico_stack_tick();
     }
     mrklog("Pico server: awaiting connection...\n");

